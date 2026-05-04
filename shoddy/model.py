@@ -46,12 +46,12 @@ class Model:
 
 
         #### Set up cosmology ###
-        self.pars = self._default_cosmo_pars.copy()
+        self.cosmo_pars = self._default_cosmo_pars.copy()
         if cosmo_pars is not None:
             for key, val in cosmo_pars.items():
-                self.pars[key] = val
+                self.cosmo_pars[key] = val
 
-        self.rhocrit0 = (3*self.pars['H0']**2/(8*np.pi*G)) # Msun / Mpc^3
+        self.rhocrit0 = (3*self.cosmo_pars['H0']**2/(8*np.pi*G)) # Msun / Mpc^3
     
         self._make_linear_power_spectrum(cosmo_pars)
         ###
@@ -119,20 +119,22 @@ class Model:
             raise Exception("halo_prof argument must be string or callable")
         
     
-    def set_hod(self, new_hod, dc=1.):
+    def set_hod(self, new_hod, pars:dict):
         if type(new_hod) is str:
             new_hod = new_hod.lower()
 
             if new_hod == 'Zheng07':
                 self.centrals = hod.zheng07_central
                 self.satellites = hod.zheng07_satellite
-                self.dc = dc
+
+                self.hod_pars = pars
             
             else:
                 raise Exception("Halo profile not recognized")
     
         elif callable(new_hod):
                 self.hod = new_hod
+                self.hod_pars = pars
                 
                 #TODO handle central satellite split
 
@@ -140,6 +142,8 @@ class Model:
             raise Exception("halo_prof argument must be string or callable")
 
         
+
+    # TODO: Need function for accessing and changing HOD parameters
 
         
 
