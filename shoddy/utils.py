@@ -16,9 +16,3 @@ def a2z(a:float) -> float:
 
 def z2a(z:float) -> float:
     return float(np.where(z>0, 1/(1+z), 1))
-
-def dM2dlogM(val, M):
-    return val * M * LN10
-
-def dlogM2dM(val, M):
-    return val / (LN10 * M)

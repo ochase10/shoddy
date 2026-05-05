@@ -1,30 +1,73 @@
 
+from abc import ABC, abstractmethod
+import numpy as np
+from scipy.special import erf
+from numpy.typing import ArrayLike, NDArray
 
 
-def avg_NcNs(M, M_min, sig_logM, M0, M1, alpha, dc=1.):
-    return N_central(M, M_min, sig_logM)**2 * N_sat_per_central(M, M0, M1, alpha) * dc**2
 
-def avg_Ns2(M, M_min, sig_logM, M0, M1, alpha, dc=1.):
-    return (N_central(M, M_min, sig_logM) * N_sat_per_central(M, M0, M1, alpha))**2 * dc**2
+class HOD(ABC):
 
-def n_gal(M_min, sig_logM, M0, M1, alpha, z=z0, Ms=Ms, hmf=behroozi_hmf):
+    def __init__(self, **kwargs):
+        self.pars = {}
 
-    dlogM = np.log10(Ms[1] / Ms[0])
+
+    @abstractmethod
+    def satellites(self, M_halo) -> NDArray[np.floating]:
+        pass
+
+
+    @abstractmethod
+    def centrals(self, M_halo) -> NDArray[np.floating]:
+        pass
+
+
+    def N_hod(self, M_halo) -> NDArray[np.floating]:
+        return self.centrals(M_halo) + self.satellites(M_halo)
     
-    dndM = hmf(Ms, dlogM, z)
-    N_of_M = N_hod(Ms, M_min, sig_logM, M0, M1, alpha)
+        
+    def update_pars(self, **new_pars):
+        self.pars.update(new_pars)
+    
 
-    return np.trapz(dndM*N_of_M, Ms)
+    def avg_NcNs(self, M_halo):
+        return self.centrals(M_halo) * self.satellites(M_halo)
+
+
+    def avg_Ns2(self, M_halo):
+        return self.satellites(M_halo)**2
 
 
 
-'zhang10'
 
-def zheng07_central(M, M_min, sig_logM):
-    return 0.5 * (1 + sci.special.erf((np.log10(M) - np.log10(M_min)) / sig_logM))
+class Zheng07(HOD):
 
-def zheng07_satellite(M, M0, M1, alpha):
-    return (np.where(M>M0,(M - M0),0) / M1)**alpha
 
-def N_hod(M, M_min, sig_logM, M0, M1, alpha, dc=1.):
-    return dc * N_central(M, M_min, sig_logM) * (1 + zheng07(M, M0, M1, alpha))
+    def __init__(self,
+                 M_min,
+                 sig_logM,
+                 M0,
+                 M1,
+                 alpha,
+                 dc=1.,
+                 **kwargs):
+        
+        self.pars = {'M_min': M_min,
+                     'sig_logM': sig_logM, 
+                     'M0': M0,
+                     'M1': M1,
+                     'alpha': alpha,
+                     'dc': dc}
+        
+        super().__init__(**kwargs)
+
+
+    def centrals(self, M_halo) -> NDArray[np.floating]:
+        return 0.5 * self.pars['dc'] * (1 + erf((np.log10(M_halo) - np.log10(self.pars['M_min'])) / self.pars['sig_logM']))
+
+    def satellites(self, M_halo) -> NDArray[np.floating]:
+        return self.pars['dc'] * (np.where(M_halo>self.pars['M0'],(M_halo - self.pars['M0']),0) / self.pars['M1'])**self.pars['alpha'] * self.centrals(M_halo)
+    
+    def __str__(self) -> str:
+        return 'Zheng07' #TODO add current pars to print
+

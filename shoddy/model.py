@@ -22,13 +22,15 @@ class Model:
             self,
             z=0,
             cosmo_pars=None,
-            hmf='tinker10',
+            hmf='tinker',
+            halo_bias='tinker10',
             halo_prof='NFW',
             halo_prof_u=None,
-            hod='Zheng07',
+            hod=None,
+            hod_pars={},
             halo_mass_grid=None,
             k_grid=None,
-            dc=None
+            **kwargs
     ):
         self.z = z
 
@@ -44,6 +46,16 @@ class Model:
         else:
             self.ks = np.logspace(np.log10(1e-4), np.log10(1e2), 1001)
 
+        self.set_hmf(hmf)
+        self.set_halo_profile(halo_prof, halo_prof_u)
+
+
+        if hod is not None and type(hod_pars) is dict:
+            self.set_hod(hod, hod_pars)
+        elif type(hod_pars) is not dict:
+            raise Exception("hod_pars argument should be type dict")
+        else:
+            self.hod = None
 
         #### Set up cosmology ###
         self.cosmo_pars = self._default_cosmo_pars.copy()
@@ -53,47 +65,46 @@ class Model:
 
         self.rhocrit0 = (3*self.cosmo_pars['H0']**2/(8*np.pi*G)) # Msun / Mpc^3
     
-        self._make_linear_power_spectrum(cosmo_pars)
+        self.init_cosmo(cosmo_pars)
         ###
 
-        self.set_hmf(hmf)
-        self.set_halo_profile(halo_prof, halo_prof_u)
+    def init_cosmo(self, pars):
 
-
-    def _make_linear_power_spectrum(self, pars):
-        
         cambpars = camb.set_params(**pars, 
                                    lmax=2000,
                                    WantTransfer=True,
                                    WantCls=False)
         cambpars.set_matter_power(redshifts=[self.z], kmax=max(self.ks)*2)
 
-        res = camb.get_results(cambpars)
+        self.cosmo = camb.get_results(cambpars)
+    
 
-        self.pkm_interp = lambda k: res.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(self.z, k)
-        self.Pkm = self.pkm_interp(self.ks)
+    def matter_power_spectrum(self, ks):
+
+        if self.pkm_interp is None:
+            self.pkm_interp = lambda k: self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(self.z, k)
+        
+        return self.pkm_interp(ks)
 
 
-    def set_hmf(self, new_hmf):
+    def set_hmf(self, new_hmf, **kwargs):
         if type(new_hmf) is str:
             new_hmf = new_hmf.lower()
 
-            if new_hmf == 'tinker10':
-                self.hmf = mass_function.tinker08
-                self.halo_bias = mass_function.tinker10_bias
+            if new_hmf == 'tinker':
+                self.HMF = mass_function.Tinker(self.cosmo, self.z, **kwargs)
 
             elif new_hmf == 'behroozi':
-                self.hmf = mass_function.behroozi13
-                self.halo_bias = mass_function.tinker10_bias
+                self.hmf = mass_function.Behroozi13(self.cosmo, self.z, **kwargs)
             
             else:
                 raise Exception("HMF not recognized")
     
-        elif callable(new_hmf):
-                self.hmf = new_hmf
+        elif isinstance(new_hmf, hod.HOD):
+                self.hod = new_hmf
 
         else:
-            raise Exception("hmf argument must be string or callable")
+            raise Exception("hmf argument must be string or MassFunction object")
         
 
     def set_halo_profile(self, new_prof, new_prof_u=None):
@@ -119,34 +130,36 @@ class Model:
             raise Exception("halo_prof argument must be string or callable")
         
     
-    def set_hod(self, new_hod, pars:dict):
+    def set_hod(self, new_hod, pars):
         if type(new_hod) is str:
             new_hod = new_hod.lower()
 
             if new_hod == 'Zheng07':
-                self.centrals = hod.zheng07_central
-                self.satellites = hod.zheng07_satellite
-
-                self.hod_pars = pars
+                self.hod = hod.Zheng07(**pars)
             
             else:
                 raise Exception("Halo profile not recognized")
     
-        elif callable(new_hod):
+        elif isinstance(new_hod, hod.HOD):
                 self.hod = new_hod
-                self.hod_pars = pars
-                
-                #TODO handle central satellite split
 
         else:
-            raise Exception("halo_prof argument must be string or callable")
+            raise Exception("halo_prof argument must be string or HOD object")
 
-        
 
-    # TODO: Need function for accessing and changing HOD parameters
+    def halo_integral(self, quant):
+        return 1. #TODO define this integral using quad or trapz
 
-        
 
+    def galaxy_density(self, recompute=False):
+        if self.hod is None:
+            raise Exception("HOD must be defined to get galaxy density")
+
+        if self.n_gal is None or recompute:
+            self.n_gal = self.halo_integral(self.hod.N_hod(self.ms))
+
+        return self.n_gal
+    
     def Pk_cs(M_min, sig_logM, M0, M1, alpha):
 
         ng = n_gal(M_min, sig_logM, M0, M1, alpha, z=z)
