@@ -1,6 +1,7 @@
 
 from . import mass_function, profile, hod
 from .utils import *
+from .halo_config import HaloConfig
 
 import camb
 import numpy as np
@@ -23,16 +24,13 @@ class Model:
             z=0,
             cosmo_pars=None,
             hmf='tinker',
-            halo_bias='tinker10',
-            halo_prof='NFW',
-            halo_prof_u=None,
+            halo_prof='nfw',
             hod=None,
             hod_pars={},
             halo_mass_grid=None,
             k_grid=None,
             **kwargs
     ):
-        self.z = z
 
         if halo_mass_grid is not None:
             self.ms = halo_mass_grid
@@ -46,17 +44,6 @@ class Model:
         else:
             self.ks = np.logspace(np.log10(1e-4), np.log10(1e2), 1001)
 
-        self.set_hmf(hmf)
-        self.set_halo_profile(halo_prof, halo_prof_u)
-
-
-        if hod is not None and type(hod_pars) is dict:
-            self.set_hod(hod, hod_pars)
-        elif type(hod_pars) is not dict:
-            raise Exception("hod_pars argument should be type dict")
-        else:
-            self.hod = None
-
         #### Set up cosmology ###
         self.cosmo_pars = self._default_cosmo_pars.copy()
         if cosmo_pars is not None:
@@ -68,13 +55,24 @@ class Model:
         self.init_cosmo(cosmo_pars)
         ###
 
+        self.halo_data = HaloConfig(self.cosmo, z, **kwargs)
+
+        self.set_hmf(hmf, self.halo_data)
+        self.set_halo_profile(halo_prof, self.halo_data)
+
+        if hod is not None:
+            self.set_hod(hod, hod_pars)
+        else:
+            self.hod = None
+
+
     def init_cosmo(self, pars):
 
         cambpars = camb.set_params(**pars, 
                                    lmax=2000,
                                    WantTransfer=True,
                                    WantCls=False)
-        cambpars.set_matter_power(redshifts=[self.z], kmax=max(self.ks)*2)
+        cambpars.set_matter_power(redshifts=[self.halo_data.z], kmax=max(self.ks)*2)
 
         self.cosmo = camb.get_results(cambpars)
     
@@ -82,20 +80,20 @@ class Model:
     def matter_power_spectrum(self, ks):
 
         if self.pkm_interp is None:
-            self.pkm_interp = lambda k: self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(self.z, k)
+            self.pkm_interp = lambda k: self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(self.halo_data.z, k)
         
         return self.pkm_interp(ks)
 
 
-    def set_hmf(self, new_hmf, **kwargs):
+    def set_hmf(self, new_hmf, config, **kwargs):
         if type(new_hmf) is str:
             new_hmf = new_hmf.lower()
 
             if new_hmf == 'tinker':
-                self.HMF = mass_function.Tinker(self.cosmo, self.z, **kwargs)
+                self.HMF = mass_function.Tinker(config, **kwargs)
 
             elif new_hmf == 'behroozi':
-                self.hmf = mass_function.Behroozi13(self.cosmo, self.z, **kwargs)
+                self.hmf = mass_function.Behroozi13(config, **kwargs)
             
             else:
                 raise Exception("HMF not recognized")
@@ -107,34 +105,32 @@ class Model:
             raise Exception("hmf argument must be string or MassFunction object")
         
 
-    def set_halo_profile(self, new_prof, new_prof_u=None):
+    def set_halo_profile(self, new_prof, config, **kwargs):
         if type(new_prof) is str:
             new_prof = new_prof.lower()
 
-            if new_prof == 'NFW':
-                self.prof = profile.nfw
-                self.prof_u = profile.u_nfw
+            if new_prof == 'nfw':
+                self.prof = profile.NFW(config, **kwargs)
             
             else:
                 raise Exception("Halo profile not recognized")
     
-        elif callable(new_prof):
+        elif isinstance(new_prof, profile.HaloProfile):
                 self.prof = new_prof
-                
-                if callable(new_prof_u):
-                    self.prof_u = new_prof_u
-                else:
-                    self.prof_u = profile.u_func
 
         else:
             raise Exception("halo_prof argument must be string or callable")
         
     
-    def set_hod(self, new_hod, pars):
-        if type(new_hod) is str:
+    def set_hod(self, new_hod, pars={}):
+        
+        if type(pars) is not dict:
+            raise Exception("HOD parameters argument should be type dict")
+        
+        elif type(new_hod) is str:
             new_hod = new_hod.lower()
 
-            if new_hod == 'Zheng07':
+            if new_hod == 'zheng07':
                 self.hod = hod.Zheng07(**pars)
             
             else:
@@ -147,18 +143,18 @@ class Model:
             raise Exception("halo_prof argument must be string or HOD object")
 
 
-    def halo_integral(self, quant):
-        return 1. #TODO define this integral using quad or trapz
-
-
     def galaxy_density(self, recompute=False):
         if self.hod is None:
             raise Exception("HOD must be defined to get galaxy density")
 
         if self.n_gal is None or recompute:
-            self.n_gal = self.halo_integral(self.hod.N_hod(self.ms))
+            self.n_gal = self.hmf.halo_integral(self.hod.N_hod(self.ms))
 
         return self.n_gal
+    
+
+
+
     
     def Pk_cs(M_min, sig_logM, M0, M1, alpha):
 
