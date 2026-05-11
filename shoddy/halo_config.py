@@ -1,9 +1,6 @@
 
 from .utils import *
 
-from abc import ABC, abstractmethod
-
-
 class HaloConfig:
 
     def __init__(self,

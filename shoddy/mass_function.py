@@ -1,9 +1,9 @@
 
 from .utils import *
-from .halo_config import HaloConfig
 
 from abc import ABC, abstractmethod
 import numpy as np
+from numpy.typing import NDArray
 from scipy.integrate import quad
 
 
@@ -20,7 +20,11 @@ class MassFunction(ABC):
         self.config = config
 
     @abstractmethod
-    def hmf(self):
+    def hmf(self, M_halo, **kwargs) -> NDArray:
+        pass
+
+    @abstractmethod
+    def bias(self, M_halo, **kwargs) -> NDArray:
         pass
 
 
@@ -42,12 +46,23 @@ class MassFunction(ABC):
         return np.log(sig2/sig1) / (M2 - M1)
     
 
-    def halo_integral(self, M_halo, quant):
+    def halo_integral(self, M_halo, quant, axis=0, **kwargs):
 
-        # if quant is a function then we can use quad
-        # if quant is an array then we'd want to see which 
+        if len(M_halo) != quant.shape[axis]:
+            raise Exception("Lengths don't match")
+        
+        newshape = [1] * quant.ndim
+        newshape[axis] = len(M_halo)
 
-        return 1. #TODO define this integral using quad or trapz
+        hmf = self.hmf(M_halo, **kwargs).reshape(newshape)
+        
+        try:
+            res = np.trapezoid(hmf * quant, M_halo, axis=axis)
+
+        except:
+            res = np.trapz(hmf * quant, M_halo, axis=axis)
+
+        return res
     
 
 class Tinker(MassFunction):

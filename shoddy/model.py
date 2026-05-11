@@ -93,13 +93,13 @@ class Model:
                 self.HMF = mass_function.Tinker(config, **kwargs)
 
             elif new_hmf == 'behroozi':
-                self.hmf = mass_function.Behroozi13(config, **kwargs)
+                self.HMF = mass_function.Behroozi13(config, **kwargs)
             
             else:
                 raise Exception("HMF not recognized")
     
-        elif isinstance(new_hmf, hod.HOD):
-                self.hod = new_hmf
+        elif isinstance(new_hmf, mass_function.MassFunction):
+                self.HMF = new_hmf
 
         else:
             raise Exception("hmf argument must be string or MassFunction object")
@@ -141,77 +141,118 @@ class Model:
 
         else:
             raise Exception("halo_prof argument must be string or HOD object")
+        
 
-
-    def galaxy_density(self, recompute=False):
+    def check_HOD_defined(self):
         if self.hod is None:
             raise Exception("HOD must be defined to get galaxy density")
 
-        if self.n_gal is None or recompute:
-            self.n_gal = self.hmf.halo_integral(self.hod.N_hod(self.ms))
+
+    def galaxy_density(self, Ms=None, recompute=False, **kwargs):
+        self.check_HOD_defined()
+        assert self.hod is not None
+
+        if self.n_gal is None or Ms is not None or recompute:
+                    
+            if Ms is None:
+                Ms = self.ms
+
+            self.n_gal = self.HMF.halo_integral(Ms, self.hod.N_hod(Ms), **kwargs)
 
         return self.n_gal
     
 
-
-
-    
-    def Pk_cs(M_min, sig_logM, M0, M1, alpha):
-
-        ng = n_gal(M_min, sig_logM, M0, M1, alpha, z=z)
-
-        ave_ncns = avg_NcNs(Ms, M_min, sig_logM, M0, M1, alpha)[None,:]
-        hmf = hmf(Ms, z=z)[None,:]
+    def Pk_cs(self, ks=None, Ms=None, **kwargs):
+        self.check_HOD_defined()
+        assert self.hod is not None
         
-        u = u_nfw(ks, Ms, z=z) # k x m
+        if Ms is None:
+            Ms = self.ms
+        if ks is None:
+            ks = self.ks
 
-        igrand = ave_ncns * hmf * u
-        res = np.trapz(igrand, Ms, axis=1)
+        ng = self.galaxy_density(Ms, **kwargs)
+
+        ave_ncns = self.hod.avg_NcNs(Ms)[None,:]
+        
+        u = self.prof.k_profile(ks, Ms) # k x m
+
+        igrand = ave_ncns * u
+        res = self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs)
 
         return 2.0 * res / ng**2
 
-    def Pk_ss(M_min, sig_logM, M0, M1, alpha, z=z0, ks=ks, Ms=Ms, hmf=behroozi_hmf):
 
-        ng = n_gal(M_min, sig_logM, M0, M1, alpha, z=z)
 
-        ave_ns2 = avg_Ns2(Ms, M_min, sig_logM, M0, M1, alpha)[None,:]
-        hmf = hmf(Ms, z=z)[None,:]
+    def Pk_ss(self, ks=None, Ms=None, **kwargs):
+
+        self.check_HOD_defined()
+        assert self.hod is not None
         
-        u = u_nfw(ks, Ms, z=z) # k x m
+        if Ms is None:
+            Ms = self.ms
+        if ks is None:
+            ks = self.ks
 
-        igrand = ave_ns2 * hmf * u**2
-        res = np.trapz(igrand, Ms, axis=1)
+        ng = self.galaxy_density(Ms, **kwargs)
+
+        ave_ns2 = self.hod.avg_Ns2(Ms)[None,:]
+        
+        u = self.prof.k_profile(ks, Ms) # k x m
+
+        igrand = ave_ns2 * u**2
+        res = self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs)
 
         return res / ng**2
 
 
-    def Pk_1h(M_min, sig_logM, M0, M1, alpha, z=z0, ks=ks, Ms=Ms, hmf=behroozi_hmf):
+    def Pk_1h(self, ks=None, Ms=None, **kwargs):
+        self.check_HOD_defined()
+        assert self.hod is not None
 
-        p_cs = Pk_cs(M_min, sig_logM, M0, M1, alpha, z=z, ks=ks, Ms=Ms, hmf=hmf)
-        p_ss = Pk_ss(M_min, sig_logM, M0, M1, alpha, z=z, ks=ks, Ms=Ms, hmf=hmf)
+        if Ms is None:
+            Ms = self.ms
+        if ks is None:
+            ks = self.ks
+
+        p_cs = self.Pk_cs(Ms, ks, **kwargs)
+        p_ss = self.Pk_ss(Ms, ks, **kwargs)
 
         return p_cs + p_ss
 
-    def Pk_2h(M_min, sig_logM, M0, M1, alpha, ks=ks, m_pk=Pk_z, z=z0, Ms=Ms, hmf=behroozi_hmf):
+    def Pk_2h(self, ks=None, Ms=None, **kwargs):
+        self.check_HOD_defined()
+        assert self.hod is not None
 
-        ng = n_gal(M_min, sig_logM, M0, M1, alpha, z=z)
+        if Ms is None:
+            Ms = self.ms
+        if ks is None:
+            ks = self.ks
+        ng = self.galaxy_density(Ms, **kwargs)
 
-        N_of_M = N_hod(Ms, M_min, sig_logM, M0, M1, alpha)[None,:]
-        hmf = hmf(Ms, z=z)[None,:]
-        b_h = halo_bias(Ms, z)[None,:]
+        N_of_M = self.hod.N_hod(Ms)[None,:]
+
+        b_h = self.HMF.bias(Ms)[None,:]
         
-        u = u_nfw(ks, Ms, z=z) # k x m
+        u = self.prof.k_profile(ks, Ms) # k x m
 
-        igrand = N_of_M * hmf * b_h * u
-        res = (np.trapz(igrand, Ms, axis=1) / ng)**2
+        igrand = N_of_M * b_h * u
+        res = (self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs) / ng)**2
 
-        return m_pk * res
+        return self.matter_power_spectrum(ks) * res
 
-    def P_gal(M_min, sig_logM, M0, M1, alpha, ks=ks, m_pk=Pk_z, z=z0, Ms=Ms, hmf=behroozi_hmf, trunc_1h=None):
-        
-        p_1h = Pk_1h(M_min, sig_logM, M0, M1, alpha, z=z, ks=ks, Ms=Ms, hmf=hmf) 
-        if trunc_1h is not None:
-            p_1h *= (1 - np.exp(-ks/trunc_1h))
-        p_2h = Pk_2h(M_min, sig_logM, M0, M1, alpha, z=z, ks=ks, Ms=Ms, hmf=hmf, m_pk=m_pk)
+    def P_gal(self, Ms=None, ks=None, trunc_1h_k=None, **kwargs):
+        self.check_HOD_defined()
+        assert self.hod is not None
+
+        if Ms is None:
+            Ms = self.ms
+        if ks is None:
+            ks = self.ks
+
+        p_1h = self.Pk_1h(ks=ks, Ms=Ms, **kwargs) 
+        if trunc_1h_k is not None:
+            p_1h *= (1 - np.exp(-ks/trunc_1h_k))
+        p_2h = self.Pk_2h(ks=ks, Ms=Ms, **kwargs)
 
         return p_1h + p_2h
