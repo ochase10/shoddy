@@ -5,6 +5,8 @@ from .halo_config import HaloConfig
 
 import camb
 import numpy as np
+from mcfit import P2xi, Hankel
+from scipy.interpolate import make_interp_spline
 
 
 class Model:
@@ -241,7 +243,7 @@ class Model:
 
         return self.matter_power_spectrum(ks) * res
 
-    def P_gal(self, Ms=None, ks=None, trunc_1h_k=None, **kwargs):
+    def P_gal(self, ks=None, Ms=None, trunc_1h_k=None, **kwargs):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -256,3 +258,89 @@ class Model:
         p_2h = self.Pk_2h(ks=ks, Ms=Ms, **kwargs)
 
         return p_1h + p_2h
+    
+
+    def limber_cl(self, power=None, z_arr=None, nz=None, Ms=None, ls=None, ks=None):
+        
+        if (nz is not None and z_arr is None) and not callable(nz):
+            raise Exception("z_arr not provided")
+
+        if z_arr is None:
+            z_arr = np.linspace(self.halo_data.z - 1, self.halo_data.z + 1, 101)
+
+        if callable(nz):
+            nz = np.array(nz(z_arr))
+            nz /= np.trapz(nz, z_arr)[:,None]
+
+        elif nz is None:
+            nz = (np.ones_like(z_arr) / (np.max(z_arr) - np.min(z_arr)))[:,None]
+
+        h_z = self.halo_data.cosmo.hubble_parameter(z_arr)[:,None]
+        chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)[:,None]
+
+        if ls is None and ks is None:
+            ls = np.logspace(0,4,201)
+        
+        if ls is None:
+            ls = ks * self.halo_data.cosmo.comoving_radial_distance(self.halo_data.z) - 0.5
+        
+        if ks is None:
+            ks = ls + 0.5 / self.halo_data.cosmo.comoving_radial_distance(self.halo_data.z)
+
+        if Ms is None:
+            Ms = self.ms
+        
+        if power is None:
+            power = self.P_gal(ks=ks, Ms=Ms)
+
+        power = power[None,:]
+
+        integrand = h_z * nz**2 / C / chi_z**2 * power
+
+        return np.trapz(integrand, z_arr, axis=0), ls
+    
+
+    def cf_3d(self, rs=None, Ms=None, ks=None, power=None, **kwargs):
+
+        if Ms is None:
+            Ms = self.ms
+        if ks is None:
+            ks = self.ks
+
+        if power is not None and len(power) != len(ks):
+            raise Exception("Power spectrum array must match shape of k array")
+        
+        if power is None:
+            power = self.P_gal(ks, Ms, **kwargs)
+
+        r, xi = P2xi(ks, q=1, lowring=True)(power, extrap=True)
+
+        if rs is not None:
+            xi = make_interp_spline(r, xi, **kwargs)(rs)
+            r = rs
+    
+        return xi, r
+
+    def cf_ang(self, theta=None, nz=None, Ms=None, ls=None, power=None, **kwargs):
+
+        if Ms is None:
+            Ms = self.ms
+
+        if power is not None:
+            if ls is None:
+                raise Exception("Must provide multipole grid")
+            elif len(power) != len(ls):
+                raise Exception("Power spectrum array must match shape of l array")
+        
+        else:
+            power, ls = self.limber_cl(nz=nz, ls=ls, Ms=Ms, **kwargs)
+
+        f_ell = ls * power / 2. / np.pi
+
+        theta_out, xi = Hankel(ls, nu=0, q=0, lowring=True)(f_ell, extrap=True)
+
+        if theta is not None:
+            xi = make_interp_spline(theta_out, xi, **kwargs)(theta)
+            theta_out = theta
+
+        return xi, theta_out
