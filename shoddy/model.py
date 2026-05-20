@@ -33,6 +33,8 @@ class Model:
             k_grid=None,
             **kwargs
     ):
+        
+        self.z = z
 
         if halo_mass_grid is not None:
             self.ms = halo_mass_grid
@@ -49,12 +51,11 @@ class Model:
         #### Set up cosmology ###
         self.cosmo_pars = self._default_cosmo_pars.copy()
         if cosmo_pars is not None:
-            for key, val in cosmo_pars.items():
-                self.cosmo_pars[key] = val
+            self.cosmo_pars.update(cosmo_pars)
 
         self.rhocrit0 = (3*self.cosmo_pars['H0']**2/(8*np.pi*G)) # Msun / Mpc^3
     
-        self.init_cosmo(cosmo_pars)
+        self.init_cosmo(self.cosmo_pars)
         ###
 
         self.halo_data = HaloConfig(self.cosmo, z, **kwargs)
@@ -74,17 +75,24 @@ class Model:
                                    lmax=2000,
                                    WantTransfer=True,
                                    WantCls=False)
-        cambpars.set_matter_power(redshifts=[self.halo_data.z], kmax=max(self.ks)*2)
+        
+        usezs = np.linspace(self.z-1.5, self.z+1.5, 20)
+        usezs = usezs[usezs >= 0]
+        cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2)
 
         self.cosmo = camb.get_results(cambpars)
+        self.pkm_interp = None
     
 
-    def matter_power_spectrum(self, ks):
+    def matter_power_spectrum(self, ks, z=None):
+
+        if z is None:
+            z = self.z
 
         if self.pkm_interp is None:
-            self.pkm_interp = lambda k: self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(self.halo_data.z, k)
+            self.pkm_interp = lambda k,z: self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(z, k)
         
-        return self.pkm_interp(ks)
+        return self.pkm_interp(ks, z)
 
 
     def set_hmf(self, new_hmf, config, **kwargs):
@@ -143,6 +151,8 @@ class Model:
 
         else:
             raise Exception("halo_prof argument must be string or HOD object")
+        
+        self.n_gal = None
         
 
     def check_HOD_defined(self):
@@ -217,12 +227,12 @@ class Model:
         if ks is None:
             ks = self.ks
 
-        p_cs = self.Pk_cs(Ms, ks, **kwargs)
-        p_ss = self.Pk_ss(Ms, ks, **kwargs)
+        p_cs = self.Pk_cs(ks=ks, Ms=Ms, **kwargs)
+        p_ss = self.Pk_ss(ks=ks, Ms=Ms, **kwargs)
 
         return p_cs + p_ss
 
-    def Pk_2h(self, ks=None, Ms=None, **kwargs):
+    def Pk_2h(self, ks=None, Ms=None, zs=None, **kwargs):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -241,9 +251,13 @@ class Model:
         igrand = N_of_M * b_h * u
         res = (self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs) / ng)**2
 
-        return self.matter_power_spectrum(ks) * res
+        if zs is None:
+            return self.matter_power_spectrum(ks) * res
+        else:
+            return self.matter_power_spectrum(ks, zs) * res[None, :] # z x k
 
-    def P_gal(self, ks=None, Ms=None, trunc_1h_k=None, **kwargs):
+
+    def P_gal(self, ks=None, Ms=None, trunc_1h_k=1e-2, zs=None, **kwargs):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -255,49 +269,47 @@ class Model:
         p_1h = self.Pk_1h(ks=ks, Ms=Ms, **kwargs) 
         if trunc_1h_k is not None:
             p_1h *= (1 - np.exp(-ks/trunc_1h_k))
-        p_2h = self.Pk_2h(ks=ks, Ms=Ms, **kwargs)
+        p_2h = self.Pk_2h(ks=ks, Ms=Ms, zs=zs, **kwargs)
 
-        return p_1h + p_2h
+        return (p_1h + p_2h) if zs is None else (p_1h[None,:] + p_2h)
     
 
-    def limber_cl(self, power=None, z_arr=None, nz=None, Ms=None, ls=None, ks=None):
+    def limber_cl(self, z_arr=None, nz=None, Ms=None, ls=None):
+
+
+        if Ms is None:
+            Ms = self.ms
         
         if (nz is not None and z_arr is None) and not callable(nz):
             raise Exception("z_arr not provided")
 
         if z_arr is None:
-            z_arr = np.linspace(self.halo_data.z - 1, self.halo_data.z + 1, 101)
+            z_arr = np.linspace(self.halo_data.z - 1, self.halo_data.z + 1, 51)
+
+        z_arr = z_arr[z_arr > 0]
 
         if callable(nz):
             nz = np.array(nz(z_arr))
-            nz /= np.trapz(nz, z_arr)[:,None]
+            nz /= np.trapz(nz, z_arr)
 
         elif nz is None:
-            nz = (np.ones_like(z_arr) / (np.max(z_arr) - np.min(z_arr)))[:,None]
+            nz = (np.ones_like(z_arr) / (np.max(z_arr) - np.min(z_arr)))
 
-        h_z = self.halo_data.cosmo.hubble_parameter(z_arr)[:,None]
-        chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)[:,None]
+        h_z = self.halo_data.cosmo.hubble_parameter(z_arr)
+        chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)
 
-        if ls is None and ks is None:
-            ls = np.logspace(0,4,201)
-        
         if ls is None:
-            ls = ks * self.halo_data.cosmo.comoving_radial_distance(self.halo_data.z) - 0.5
-        
-        if ks is None:
-            ks = ls + 0.5 / self.halo_data.cosmo.comoving_radial_distance(self.halo_data.z)
+            ls = np.logspace(0,6,1001)
 
-        if Ms is None:
-            Ms = self.ms
-        
-        if power is None:
-            power = self.P_gal(ks=ks, Ms=Ms)
+        power = np.empty((len(z_arr), len(ls)))
 
-        power = power[None,:]
+        for i, z in enumerate(z_arr):
+            ks = (ls + 0.5) / self.halo_data.cosmo.comoving_radial_distance(z)
+            power[i] = self.P_gal(ks=ks, Ms=Ms, zs=z)
 
-        integrand = h_z * nz**2 / C / chi_z**2 * power
+        cl = np.trapz(h_z[:,None] * nz[:,None]**2 / C / chi_z[:,None]**2 * power, z_arr, axis=0)
 
-        return np.trapz(integrand, z_arr, axis=0), ls
+        return cl, ls
     
 
     def cf_3d(self, rs=None, Ms=None, ks=None, power=None, **kwargs):
@@ -326,18 +338,13 @@ class Model:
         if Ms is None:
             Ms = self.ms
 
-        if power is not None:
-            if ls is None:
-                raise Exception("Must provide multipole grid")
-            elif len(power) != len(ls):
-                raise Exception("Power spectrum array must match shape of l array")
-        
-        else:
-            power, ls = self.limber_cl(nz=nz, ls=ls, Ms=Ms, **kwargs)
+        power, ls = self.limber_cl(nz=nz, ls=ls, Ms=Ms, **kwargs)
 
-        f_ell = ls * power / 2. / np.pi
+        f_ell = power / 2. / np.pi
 
-        theta_out, xi = Hankel(ls, nu=0, q=0, lowring=True)(f_ell, extrap=True)
+        theta_out, xi = Hankel(ls, nu=0, q=1, lowring=True)(f_ell, extrap=True)
+
+        theta_out = np.rad2deg(theta_out)
 
         if theta is not None:
             xi = make_interp_spline(theta_out, xi, **kwargs)(theta)

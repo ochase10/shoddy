@@ -52,14 +52,14 @@ class Zheng07(HOD):
                  dc=1.,
                  **kwargs):
         
+        super().__init__(**kwargs)
+        
         self.pars = {'M_min': M_min,
                      'sig_logM': sig_logM, 
                      'M0': M0,
                      'M1': M1,
                      'alpha': alpha,
                      'dc': dc}
-        
-        super().__init__(**kwargs)
 
 
     def centrals(self, M_halo) -> NDArray[np.floating]:
