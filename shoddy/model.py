@@ -6,6 +6,7 @@ from .halo_config import HaloConfig
 import camb
 import numpy as np
 from scipy.interpolate import make_interp_spline
+from mcfit import P2xi, Hankel
 
 
 class Model:
@@ -320,7 +321,7 @@ class Model:
         if power is None:
             power = self.P_gal(ks=ks, Ms=Ms)
 
-        r, xi = pk_to_xi(ks, power)
+        r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(power, extrap=True)
 
         if rs is not None:
             xi = make_interp_spline(r, xi)(rs)
@@ -332,11 +333,12 @@ class Model:
 
         cl, ls = self.limber_cl(z_arr=z_arr, nz=nz, Ms=Ms, ls=ls, trunc_1h_k=trunc_1h_k)
 
-        theta_out, xi = cl_to_wtheta(ls, cl)
+        # Hankel computes ∫ a(l) J_0(θl) l dl; cl/(2π) gives w(θ) directly
+        theta_out, wtheta = Hankel(ls, nu=0, q=1, lowring=True)(cl / (2 * np.pi), extrap=True)
         theta_out = np.rad2deg(theta_out)
 
         if theta is not None:
-            xi = make_interp_spline(theta_out, xi)(theta)
+            wtheta = make_interp_spline(theta_out, wtheta)(theta)
             theta_out = theta
 
-        return xi, theta_out
+        return wtheta, theta_out
