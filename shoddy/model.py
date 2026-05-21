@@ -5,7 +5,6 @@ from .halo_config import HaloConfig
 
 import camb
 import numpy as np
-from mcfit import P2xi, Hankel
 from scipy.interpolate import make_interp_spline
 
 
@@ -58,16 +57,21 @@ class Model:
         self.init_cosmo(self.cosmo_pars)
         ###
 
-        self.halo_data = HaloConfig(self.cosmo, z, **kwargs)
+        self.halo_data = HaloConfig(self.cosmo, z, mass_grid=self.ms, **kwargs)
 
         self.set_hmf(hmf, self.halo_data)
         self.set_halo_profile(halo_prof, self.halo_data)
+        self._precompute_halo_arrays()
 
         if hod is not None:
             self.set_hod(hod, hod_pars)
         else:
             self.hod = None
 
+
+    def _precompute_halo_arrays(self):
+        self._hmf_arr = self.HMF.hmf(self.ms)
+        self._bias_arr = self.HMF.bias(self.ms)
 
     def init_cosmo(self, pars):
 
@@ -90,9 +94,9 @@ class Model:
             z = self.z
 
         if self.pkm_interp is None:
-            self.pkm_interp = lambda k,z: self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False).P(z, k)
-        
-        return self.pkm_interp(ks, z)
+            self.pkm_interp = self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False)
+
+        return self.pkm_interp.P(z, ks)
 
 
     def set_hmf(self, new_hmf, config, **kwargs):
@@ -160,65 +164,41 @@ class Model:
             raise Exception("HOD must be defined to get galaxy density")
 
 
-    def galaxy_density(self, Ms=None, recompute=False, **kwargs):
+    def galaxy_density(self, Ms=None, recompute=False):
         self.check_HOD_defined()
         assert self.hod is not None
 
         if self.n_gal is None or Ms is not None or recompute:
-                    
             if Ms is None:
                 Ms = self.ms
+                hmf_arr = self._hmf_arr
+            else:
+                hmf_arr = None
 
-            self.n_gal = self.HMF.halo_integral(Ms, self.hod.N_hod(Ms), **kwargs)
+            self.n_gal = self.HMF.halo_integral(Ms, self.hod.N_hod(Ms), hmf_arr=hmf_arr)
 
         return self.n_gal
     
 
-    def Pk_cs(self, ks=None, Ms=None, **kwargs):
+    def Pk_cs(self, Ms, u, ng):
         self.check_HOD_defined()
         assert self.hod is not None
-        
-        if Ms is None:
-            Ms = self.ms
-        if ks is None:
-            ks = self.ks
 
-        ng = self.galaxy_density(Ms, **kwargs)
-
-        ave_ncns = self.hod.avg_NcNs(Ms)[None,:]
-        
-        u = self.prof.k_profile(ks, Ms) # k x m
-
+        ave_ncns = self.hod.avg_NcNs(Ms)[None, :]
         igrand = ave_ncns * u
-        res = self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs)
-
+        res = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr)
         return 2.0 * res / ng**2
 
-
-
-    def Pk_ss(self, ks=None, Ms=None, **kwargs):
-
+    def Pk_ss(self, Ms, u, ng):
         self.check_HOD_defined()
         assert self.hod is not None
-        
-        if Ms is None:
-            Ms = self.ms
-        if ks is None:
-            ks = self.ks
 
-        ng = self.galaxy_density(Ms, **kwargs)
-
-        ave_ns2 = self.hod.avg_Ns2(Ms)[None,:]
-        
-        u = self.prof.k_profile(ks, Ms) # k x m
-
+        ave_ns2 = self.hod.avg_Ns2(Ms)[None, :]
         igrand = ave_ns2 * u**2
-        res = self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs)
-
+        res = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr)
         return res / ng**2
 
-
-    def Pk_1h(self, ks=None, Ms=None, **kwargs):
+    def Pk_1h(self, ks=None, Ms=None):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -227,12 +207,12 @@ class Model:
         if ks is None:
             ks = self.ks
 
-        p_cs = self.Pk_cs(ks=ks, Ms=Ms, **kwargs)
-        p_ss = self.Pk_ss(ks=ks, Ms=Ms, **kwargs)
+        ng = self.galaxy_density(Ms)
+        u = self.prof.k_profile(ks, Ms)
 
-        return p_cs + p_ss
+        return self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
 
-    def Pk_2h(self, ks=None, Ms=None, zs=None, **kwargs):
+    def Pk_2h(self, ks=None, Ms=None, zs=None):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -240,24 +220,22 @@ class Model:
             Ms = self.ms
         if ks is None:
             ks = self.ks
-        ng = self.galaxy_density(Ms, **kwargs)
 
-        N_of_M = self.hod.N_hod(Ms)[None,:]
-
-        b_h = self.HMF.bias(Ms)[None,:]
-        
-        u = self.prof.k_profile(ks, Ms) # k x m
+        ng = self.galaxy_density(Ms)
+        N_of_M = self.hod.N_hod(Ms)[None, :]
+        b_h = self._bias_arr[None, :]
+        u = self.prof.k_profile(ks, Ms)
 
         igrand = N_of_M * b_h * u
-        res = (self.HMF.halo_integral(Ms, igrand, axis=1, **kwargs) / ng)**2
+        res = (self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr) / ng)**2
 
         if zs is None:
             return self.matter_power_spectrum(ks) * res
         else:
-            return self.matter_power_spectrum(ks, zs) * res[None, :] # z x k
+            return self.matter_power_spectrum(ks, zs) * res[None, :]
 
 
-    def P_gal(self, ks=None, Ms=None, trunc_1h_k=1e-2, zs=None, **kwargs):
+    def P_gal(self, ks=None, Ms=None, trunc_1h_k=1e-2, zs=None):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -266,53 +244,70 @@ class Model:
         if ks is None:
             ks = self.ks
 
-        p_1h = self.Pk_1h(ks=ks, Ms=Ms, **kwargs) 
+        p_1h = self.Pk_1h(ks=ks, Ms=Ms)
         if trunc_1h_k is not None:
             p_1h *= (1 - np.exp(-ks/trunc_1h_k))
-        p_2h = self.Pk_2h(ks=ks, Ms=Ms, zs=zs, **kwargs)
+        p_2h = self.Pk_2h(ks=ks, Ms=Ms, zs=zs)
 
         return (p_1h + p_2h) if zs is None else (p_1h[None,:] + p_2h)
     
 
-    def limber_cl(self, z_arr=None, nz=None, Ms=None, ls=None):
-
+    def limber_cl(self, z_arr=None, nz=None, Ms=None, ls=None, trunc_1h_k=1e-2):
+        self.check_HOD_defined()
+        assert self.hod is not None
 
         if Ms is None:
             Ms = self.ms
-        
+
         if (nz is not None and z_arr is None) and not callable(nz):
-            raise Exception("z_arr not provided")
+            raise ValueError("z_arr must be provided when nz is an array")
 
         if z_arr is None:
             z_arr = np.linspace(self.halo_data.z - 1, self.halo_data.z + 1, 51)
-
         z_arr = z_arr[z_arr > 0]
 
         if callable(nz):
-            nz = np.array(nz(z_arr))
+            nz = np.asarray(nz(z_arr))
             nz /= np.trapz(nz, z_arr)
-
         elif nz is None:
-            nz = (np.ones_like(z_arr) / (np.max(z_arr) - np.min(z_arr)))
+            nz = np.ones_like(z_arr) / (z_arr[-1] - z_arr[0])
 
         h_z = self.halo_data.cosmo.hubble_parameter(z_arr)
         chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)
 
         if ls is None:
-            ls = np.logspace(0,6,1001)
+            ls = np.logspace(0, 6, 1001)
 
-        power = np.empty((len(z_arr), len(ls)))
+        # Limber k-values for every (z, l) pair: shape (n_z, n_l)
+        ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]
+        ks_flat = ks_2d.ravel()
 
-        for i, z in enumerate(z_arr):
-            ks = (ls + 0.5) / self.halo_data.cosmo.comoving_radial_distance(z)
-            power[i] = self.P_gal(ks=ks, Ms=Ms, zs=z)
+        # Compute profile and HOD integrals once across all k values
+        ng = self.galaxy_density(Ms)
+        u_flat = self.prof.k_profile(ks_flat, Ms)
 
-        cl = np.trapz(h_z[:,None] * nz[:,None]**2 / C / chi_z[:,None]**2 * power, z_arr, axis=0)
+        p_1h_flat = self.Pk_cs(Ms, u_flat, ng) + self.Pk_ss(Ms, u_flat, ng)
+        if trunc_1h_k is not None:
+            p_1h_flat *= (1 - np.exp(-ks_flat / trunc_1h_k))
+
+        # 2h HOD factor F(k)^2 — independent of z
+        igrand = self.hod.N_hod(Ms)[None, :] * self._bias_arr[None, :] * u_flat
+        f_flat = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr) / ng
+
+        # P_lin(k_Limber, z): cheap spline lookup, one call per z
+        p_lin_2d = np.stack([
+            self.matter_power_spectrum(ks_2d[i], z_arr[i])
+            for i in range(len(z_arr))
+        ])
+
+        power = (p_1h_flat + f_flat**2 * p_lin_2d.ravel()).reshape(len(z_arr), len(ls))
+
+        cl = np.trapz(h_z[:, None] * nz[:, None]**2 / C / chi_z[:, None]**2 * power, z_arr, axis=0)
 
         return cl, ls
     
 
-    def cf_3d(self, rs=None, Ms=None, ks=None, power=None, **kwargs):
+    def cf_3d(self, rs=None, Ms=None, ks=None, power=None):
 
         if Ms is None:
             Ms = self.ms
@@ -320,34 +315,28 @@ class Model:
             ks = self.ks
 
         if power is not None and len(power) != len(ks):
-            raise Exception("Power spectrum array must match shape of k array")
-        
-        if power is None:
-            power = self.P_gal(ks, Ms, **kwargs)
+            raise ValueError("Power spectrum array length must match k array")
 
-        r, xi = P2xi(ks, q=1, lowring=True)(power, extrap=True)
+        if power is None:
+            power = self.P_gal(ks=ks, Ms=Ms)
+
+        r, xi = pk_to_xi(ks, power)
 
         if rs is not None:
-            xi = make_interp_spline(r, xi, **kwargs)(rs)
+            xi = make_interp_spline(r, xi)(rs)
             r = rs
-    
+
         return xi, r
 
-    def cf_ang(self, theta=None, nz=None, Ms=None, ls=None, power=None, **kwargs):
+    def cf_ang(self, theta=None, nz=None, z_arr=None, Ms=None, ls=None, trunc_1h_k=1e-2):
 
-        if Ms is None:
-            Ms = self.ms
+        cl, ls = self.limber_cl(z_arr=z_arr, nz=nz, Ms=Ms, ls=ls, trunc_1h_k=trunc_1h_k)
 
-        power, ls = self.limber_cl(nz=nz, ls=ls, Ms=Ms, **kwargs)
-
-        f_ell = power / 2. / np.pi
-
-        theta_out, xi = Hankel(ls, nu=0, q=1, lowring=True)(f_ell, extrap=True)
-
+        theta_out, xi = cl_to_wtheta(ls, cl)
         theta_out = np.rad2deg(theta_out)
 
         if theta is not None:
-            xi = make_interp_spline(theta_out, xi, **kwargs)(theta)
+            xi = make_interp_spline(theta_out, xi)(theta)
             theta_out = theta
 
         return xi, theta_out
