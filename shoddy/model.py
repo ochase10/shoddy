@@ -1,6 +1,7 @@
 
 from . import mass_function, profile, hod
 from .utils import *
+from .utils import _trapz
 from .halo_config import HaloConfig
 
 import camb
@@ -89,15 +90,34 @@ class Model:
         self.pkm_interp = None
     
 
-    def matter_power_spectrum(self, ks, z=None):
+    def _ensure_pk_interp(self):
+        if self.pkm_interp is None:
+            self.pkm_interp = self.cosmo.get_matter_power_interpolator(
+                nonlinear=False, hubble_units=False, k_hunit=False
+            )
 
+    def matter_power_spectrum(self, ks, z=None):
+        """
+        Linear matter power spectrum.
+
+        Parameters
+        ----------
+        ks : array-like
+            Wavenumbers [1/Mpc].
+        z : float or array-like, optional
+            Redshift(s).  Scalar (or None → self.z) evaluates at a single
+            redshift and returns a 1-D array.  A 1-D array is treated as
+            element-wise pairs ``(ks[i], z[i])`` and also returns 1-D —
+            this avoids the Cartesian-product overhead of CAMB's default
+            grid evaluation and is the path used by ``limber_cl``.
+        """
         if z is None:
             z = self.z
-
-        if self.pkm_interp is None:
-            self.pkm_interp = self.cosmo.get_matter_power_interpolator(nonlinear=False, hubble_units=False, k_hunit=False)
-
-        return self.pkm_interp.P(z, ks)
+        self._ensure_pk_interp()
+        assert self.pkm_interp is not None
+        # grid=False for array z: evaluate at (k_i, z_i) pairs, not all combos
+        grid = np.ndim(z) == 0
+        return self.pkm_interp.P(z, ks, grid=grid).ravel()
 
 
     def set_hmf(self, new_hmf, config, **kwargs):
@@ -213,7 +233,7 @@ class Model:
 
         return self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
 
-    def Pk_2h(self, ks=None, Ms=None, zs=None):
+    def Pk_2h(self, ks=None, z=None, Ms=None):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -230,13 +250,11 @@ class Model:
         igrand = N_of_M * b_h * u
         res = (self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr) / ng)**2
 
-        if zs is None:
-            return self.matter_power_spectrum(ks) * res
-        else:
-            return self.matter_power_spectrum(ks, zs) * res[None, :]
+        # matter_power_spectrum handles scalar and array z uniformly (grid=False for arrays)
+        return self.matter_power_spectrum(ks, z) * res
 
 
-    def P_gal(self, ks=None, Ms=None, trunc_1h_k=1e-2, zs=None):
+    def P_gal(self, ks=None, z=None, Ms=None, trunc_1h_k=1e-2):
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -248,19 +266,64 @@ class Model:
         p_1h = self.Pk_1h(ks=ks, Ms=Ms)
         if trunc_1h_k is not None:
             p_1h *= (1 - np.exp(-ks/trunc_1h_k))
-        p_2h = self.Pk_2h(ks=ks, Ms=Ms, zs=zs)
 
-        return (p_1h + p_2h) if zs is None else (p_1h[None,:] + p_2h)
-    
+        return p_1h + self.Pk_2h(ks=ks, Ms=Ms, z=z)
 
-    def limber_cl(self, z_arr=None, nz=None, Ms=None, ls=None, trunc_1h_k=1e-2):
-        self.check_HOD_defined()
-        assert self.hod is not None
 
-        if Ms is None:
-            Ms = self.ms
+    def limber_cl(self, power_func, z_arr=None, nz=None, ls=None):
+        """
+        Generic Limber projection of an angular power spectrum.
 
-        if (nz is not None and z_arr is None) and not callable(nz):
+        Parameters
+        ----------
+        power_func : callable
+            Power spectrum with signature ``(ks, z) -> P_arr`` where both
+            ``ks`` and ``z`` are flat 1-D arrays of the same length
+            (one entry per Limber pair) and the return value is also 1-D.
+            For z-independent spectra (e.g. ``Pk_1h``) the ``z`` argument
+            can simply be ignored.
+        z_arr : array-like, optional
+            Redshift grid for the integral.  Defaults to 51 points centred
+            on the model redshift.
+        nz : array-like or callable, optional
+            Redshift distribution n(z).  A callable is evaluated on
+            ``z_arr`` and normalised; an array is used directly (must align
+            with ``z_arr``); ``None`` gives a top-hat over ``z_arr``.
+        ls : array-like, optional
+            Multipoles at which to evaluate C_l.  Defaults to 1001
+            log-spaced points from 1 to 10^6.
+
+        Returns
+        -------
+        cl : ndarray
+            Angular power spectrum C_l.
+        ls : ndarray
+            Corresponding multipoles.
+
+        Examples
+        --------
+        Full galaxy power (default in ``cf_ang``)::
+
+            model.limber_cl(lambda ks, z: model.P_gal(ks=ks, z=z))
+
+        1-halo term only (z-independent, ignore z)::
+
+            model.limber_cl(lambda ks, z: model.Pk_1h(ks=ks))
+
+        2-halo term only::
+
+            model.limber_cl(lambda ks, z: model.Pk_2h(ks=ks, z=z))
+
+        Matter power spectrum (positional args already match)::
+
+            model.limber_cl(model.matter_power_spectrum)
+        """
+
+        if power_func is None:
+            self.check_HOD_defined()
+            power_func = lambda ks, z: self.P_gal(ks=ks, z=z, Ms=self.ms)
+        
+        if nz is not None and z_arr is None and not callable(nz):
             raise ValueError("z_arr must be provided when nz is an array")
 
         if z_arr is None:
@@ -269,7 +332,7 @@ class Model:
 
         if callable(nz):
             nz = np.asarray(nz(z_arr))
-            nz /= np.trapz(nz, z_arr)
+            nz /= _trapz(nz, z_arr)
         elif nz is None:
             nz = np.ones_like(z_arr) / (z_arr[-1] - z_arr[0])
 
@@ -279,31 +342,19 @@ class Model:
         if ls is None:
             ls = np.logspace(0, 6, 1001)
 
-        # Limber k-values for every (z, l) pair: shape (n_z, n_l)
-        ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]
+        n_z, n_l = len(z_arr), len(ls)
+        ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_l)
+
+        # Flatten to 1-D pairs: each (z_i, l_j) maps to one (k, z) entry
         ks_flat = ks_2d.ravel()
+        z_flat  = np.repeat(z_arr, n_l)
 
-        # Compute profile and HOD integrals once across all k values
-        ng = self.galaxy_density(Ms)
-        u_flat = self.prof.k_profile(ks_flat, Ms)
+        power_2d = power_func(ks_flat, z_flat).reshape(n_z, n_l)
 
-        p_1h_flat = self.Pk_cs(Ms, u_flat, ng) + self.Pk_ss(Ms, u_flat, ng)
-        if trunc_1h_k is not None:
-            p_1h_flat *= (1 - np.exp(-ks_flat / trunc_1h_k))
-
-        # 2h HOD factor F(k)^2 — independent of z
-        igrand = self.hod.N_hod(Ms)[None, :] * self._bias_arr[None, :] * u_flat
-        f_flat = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr) / ng
-
-        # P_lin(k_Limber, z): cheap spline lookup, one call per z
-        p_lin_2d = np.stack([
-            self.matter_power_spectrum(ks_2d[i], z_arr[i])
-            for i in range(len(z_arr))
-        ])
-
-        power = (p_1h_flat + f_flat**2 * p_lin_2d.ravel()).reshape(len(z_arr), len(ls))
-
-        cl = np.trapz(h_z[:, None] * nz[:, None]**2 / C / chi_z[:, None]**2 * power, z_arr, axis=0)
+        cl = _trapz(
+            h_z[:, None] * nz[:, None]**2 / C / chi_z[:, None]**2 * power_2d,
+            z_arr, axis=0
+        )
 
         return cl, ls
     
@@ -329,9 +380,13 @@ class Model:
 
         return xi, r
 
-    def cf_ang(self, theta=None, nz=None, z_arr=None, Ms=None, ls=None, trunc_1h_k=1e-2):
+    def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, trunc_1h_k=1e-2):
 
-        cl, ls = self.limber_cl(z_arr=z_arr, nz=nz, Ms=Ms, ls=ls, trunc_1h_k=trunc_1h_k)
+        if power_func is None:
+            self.check_HOD_defined()
+            power_func = lambda ks, z: self.P_gal(ks=ks, z=z, Ms=Ms, trunc_1h_k=trunc_1h_k)
+
+        cl, ls = self.limber_cl(power_func, z_arr=z_arr, nz=nz, ls=ls)
 
         # Hankel computes ∫ a(l) J_0(θl) l dl; cl/(2π) gives w(θ) directly
         theta_out, wtheta = Hankel(ls, nu=0, q=1, lowring=True)(cl / (2 * np.pi), extrap=True)

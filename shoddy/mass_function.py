@@ -1,11 +1,10 @@
 
 from .utils import *
+from .utils import _trapz
 
 from abc import ABC, abstractmethod
 import numpy as np
 from numpy.typing import NDArray
-
-_trapz = getattr(np, 'trapezoid', np.trapz)
 
 
 def dM2dlogM(val, M):

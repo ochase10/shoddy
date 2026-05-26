@@ -10,9 +10,26 @@ class HaloProfile(ABC):
 
     def __init__(self, config):
         self.config = config
+        self._u_cache = None
+        self._cache_key = None
+
+    @staticmethod
+    def _ks_fingerprint(ks):
+        """O(1) fingerprint: catches same-values-different-object across calls."""
+        n = len(ks)
+        return (n, ks.dtype.str, float(ks[0]), float(ks[n // 2]), float(ks[-1]))
+
+    def k_profile(self, ks, M, recompute=False) -> NDArray[np.floating]:
+        key = (self._ks_fingerprint(ks), id(M))
+        if not recompute and self._u_cache is not None and key == self._cache_key:
+            return self._u_cache
+        result = self._compute_profile(ks, M)
+        self._u_cache = result
+        self._cache_key = key
+        return result
 
     @abstractmethod
-    def k_profile(self, ks, M) -> NDArray[np.floating]:
+    def _compute_profile(self, ks, M) -> NDArray[np.floating]:
         pass
 
     def conc(self, M, cnorm=7.85, alpha=0.71, beta=-0.081, m0=2e12):
@@ -24,7 +41,7 @@ class HaloProfile(ABC):
 
 class NFW(HaloProfile):
 
-    def k_profile(self, ks, M):
+    def _compute_profile(self, ks, M):
         if not isinstance(M, np.ndarray):
             M = np.array(M)
 
