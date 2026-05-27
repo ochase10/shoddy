@@ -38,14 +38,14 @@ class Model:
         self.z = z
 
         if halo_mass_grid is not None:
-            self.ms = halo_mass_grid
+            self.ms = np.asarray(halo_mass_grid)
         else:
             self.ms = np.logspace(np.log10(1e9), np.log10(1e17), 256)
 
         self.log_ms = np.log10(self.ms)
 
         if k_grid is not None:
-            self.ks = k_grid
+            self.ks = np.asarray(k_grid)
         else:
             self.ks = np.logspace(np.log10(1e-4), np.log10(1e2), 1001)
 
@@ -190,18 +190,6 @@ class Model:
         self.n_gal = None
 
 
-    def set_delta(self, new_delta):
-        """Update halo overdensity threshold and recompute cached HMF/bias arrays."""
-        self.halo_data.set_delta(new_delta)
-        self._precompute_halo_arrays()
-        self.n_gal = None
-
-    def set_crit(self, new_crit):
-        """Update peak-height threshold and recompute cached HMF/bias arrays."""
-        self.halo_data.set_crit(new_crit)
-        self._precompute_halo_arrays()
-        self.n_gal = None
-
     def update_hod_pars(self, **new_pars):
         """Update HOD parameters and invalidate the cached galaxy density."""
         self.check_HOD_defined()
@@ -297,6 +285,8 @@ class Model:
             Ms = self.ms
         if ks is None:
             ks = self.ks
+        else:
+            ks = np.asarray(ks)
 
         p_1h = self.Pk_1h(ks=ks, Ms=Ms)
         if trunc_1h_k is not None:
@@ -385,6 +375,8 @@ class Model:
 
         if ls is None:
             ls = np.logspace(0, 6, 1001)
+        else:
+            ls = np.asarray(ls)
 
         n_z, n_l = len(z_arr), len(ls)
         ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_l)

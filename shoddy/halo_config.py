@@ -47,10 +47,3 @@ class HaloConfig:
 
     def rvir(self, M):
         return (3 * M / (4 * np.pi * self.rhocrit * self.delta))**(1/3)
-
-    def set_delta(self, new_delta):
-        self.delta = new_delta
-
-    def set_crit(self, new_crit):
-        self.crit = new_crit
-
