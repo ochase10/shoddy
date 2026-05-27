@@ -167,7 +167,7 @@ class Model:
                 self.prof = new_prof
 
         else:
-            raise Exception("halo_prof argument must be string or callable")
+            raise Exception("halo_prof argument must be string or HaloProfile object")
         
     
     def set_hod(self, new_hod, pars={}):
