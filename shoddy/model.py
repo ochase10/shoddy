@@ -82,7 +82,7 @@ class Model:
                                    WantTransfer=True,
                                    WantCls=False)
         
-        usezs = np.linspace(self.z-1.5, self.z+1.5, 20)
+        usezs = np.linspace(self.z-1.5, self.z+1.5, 20)[::-1]
         usezs = usezs[usezs >= 0]
         cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2)
 
@@ -327,7 +327,7 @@ class Model:
             raise ValueError("z_arr must be provided when nz is an array")
 
         if z_arr is None:
-            z_arr = np.linspace(self.halo_data.z - 1, self.halo_data.z + 1, 51)
+            z_arr = np.linspace(self.halo_data.z - 0.5, self.halo_data.z + 0.5, 51)
         z_arr = z_arr[z_arr > 0]
 
         if callable(nz):
