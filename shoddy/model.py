@@ -71,19 +71,12 @@ class Model:
             self.hod = None
 
 
-    @staticmethod
-    def _ms_fingerprint(ms):
-        """O(1) fingerprint matching the pattern used in HaloProfile._ks_fingerprint."""
-        n = len(ms)
-        return (n, ms.dtype.str, float(ms[0]), float(ms[n // 2]), float(ms[-1]))
-
     def _is_default_grid(self, Ms):
-        return self._ms_fingerprint(Ms) == self._ms_key
+        return np.array_equal(Ms, self.ms)
 
     def _precompute_halo_arrays(self):
         self._hmf_arr = self.HMF.hmf(self.ms)
         self._bias_arr = self.HMF.bias(self.ms)
-        self._ms_key = self._ms_fingerprint(self.ms)
 
     def init_cosmo(self, pars):
 
@@ -196,6 +189,18 @@ class Model:
         
         self.n_gal = None
 
+
+    def set_delta(self, new_delta):
+        """Update halo overdensity threshold and recompute cached HMF/bias arrays."""
+        self.halo_data.set_delta(new_delta)
+        self._precompute_halo_arrays()
+        self.n_gal = None
+
+    def set_crit(self, new_crit):
+        """Update peak-height threshold and recompute cached HMF/bias arrays."""
+        self.halo_data.set_crit(new_crit)
+        self._precompute_halo_arrays()
+        self.n_gal = None
 
     def update_hod_pars(self, **new_pars):
         """Update HOD parameters and invalidate the cached galaxy density."""
@@ -361,6 +366,8 @@ class Model:
         z_arr = np.asarray(z_arr)
         mask = z_arr > 0
         z_arr = z_arr[mask]
+        if len(z_arr) < 2:
+            raise ValueError("z_arr must contain at least 2 positive redshift samples")
 
         if nz is None:
             nz = np.ones_like(z_arr) / (z_arr[-1] - z_arr[0])

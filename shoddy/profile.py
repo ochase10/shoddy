@@ -11,21 +11,23 @@ class HaloProfile(ABC):
     def __init__(self, config):
         self.config = config
         self._u_cache = None
-        self._cache_key = None
-
-    @staticmethod
-    def _ks_fingerprint(ks):
-        """O(1) fingerprint: catches same-values-different-object across calls."""
-        n = len(ks)
-        return (n, ks.dtype.str, float(ks[0]), float(ks[n // 2]), float(ks[-1]))
+        self._cache_ks = None
+        self._cache_M = None
 
     def k_profile(self, ks, M, recompute=False) -> NDArray[np.floating]:
-        key = (self._ks_fingerprint(ks), id(M))
-        if not recompute and self._u_cache is not None and key == self._cache_key:
+        ks = np.asarray(ks)
+        M = np.asarray(M)
+        if (not recompute
+                and self._u_cache is not None
+                and self._cache_ks is not None
+                and self._cache_M is not None
+                and np.array_equal(ks, self._cache_ks)
+                and np.array_equal(M, self._cache_M)):
             return self._u_cache
         result = self._compute_profile(ks, M)
         self._u_cache = result
-        self._cache_key = key
+        self._cache_ks = ks
+        self._cache_M = M
         return result
 
     @abstractmethod
@@ -60,4 +62,7 @@ class NFW(HaloProfile):
         exterm = np.sin(krv)/(krv+krs)
         norm = np.log(1+con) - con/(1+con)
 
-        return (cterm + sterm - exterm) / norm
+        result = (cterm + sterm - exterm) / norm
+        # u(k→0) = 1 analytically; sici terms diverge and cancel at k=0 producing NaN
+        result[~np.isfinite(result)] = 1.0
+        return result
