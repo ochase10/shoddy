@@ -151,7 +151,11 @@ class Model:
 
         else:
             raise Exception("hmf argument must be string or MassFunction object")
-        
+
+        if hasattr(self, '_hmf_arr'):
+            self._precompute_halo_arrays()
+            self.n_gal = None
+
 
     def set_halo_profile(self, new_prof, config, **kwargs):
         if type(new_prof) is str:
@@ -356,16 +360,19 @@ class Model:
             z_arr = np.linspace(self.halo_data.z - 0.5, self.halo_data.z + 0.5, 51)
         z_arr = np.asarray(z_arr)
         mask = z_arr > 0
-        if isinstance(nz, np.ndarray):
-            nz = nz[mask]
         z_arr = z_arr[mask]
 
-        if callable(nz):
+        if nz is None:
+            nz = np.ones_like(z_arr) / (z_arr[-1] - z_arr[0])
+        elif not callable(nz):
+            nz = np.asarray(nz)
+            if len(nz) != len(mask):
+                raise ValueError("nz array must match length of z_arr")
+            nz = nz[mask]
+        else:
             nz = np.asarray(nz(z_arr))
             nz /= _trapz(nz, z_arr)
-        elif nz is None:
-            nz = np.ones_like(z_arr) / (z_arr[-1] - z_arr[0])
-
+        
         h_z = self.halo_data.cosmo.hubble_parameter(z_arr)
         chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)
 
