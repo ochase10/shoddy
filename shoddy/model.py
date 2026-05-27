@@ -188,7 +188,7 @@ class Model:
                 self.hod = new_hod
 
         else:
-            raise Exception("halo_prof argument must be string or HOD object")
+            raise Exception("hod argument must be string or HOD object")
         
         self.n_gal = None
 
