@@ -59,7 +59,7 @@ class Model:
         self.init_cosmo(self.cosmo_pars)
         ###
 
-        self.halo_data = HaloConfig(self.cosmo, z, mass_grid=self.ms, **kwargs)
+        self.halo_data = HaloConfig(self.cosmo, z, mass_grid=self.ms, z_sigma_idx=self._z_sigma_idx, **kwargs)
 
         self.set_hmf(hmf, self.halo_data)
         self.set_halo_profile(halo_prof, self.halo_data)
@@ -71,9 +71,19 @@ class Model:
             self.hod = None
 
 
+    @staticmethod
+    def _ms_fingerprint(ms):
+        """O(1) fingerprint matching the pattern used in HaloProfile._ks_fingerprint."""
+        n = len(ms)
+        return (n, ms.dtype.str, float(ms[0]), float(ms[n // 2]), float(ms[-1]))
+
+    def _is_default_grid(self, Ms):
+        return self._ms_fingerprint(Ms) == self._ms_key
+
     def _precompute_halo_arrays(self):
         self._hmf_arr = self.HMF.hmf(self.ms)
         self._bias_arr = self.HMF.bias(self.ms)
+        self._ms_key = self._ms_fingerprint(self.ms)
 
     def init_cosmo(self, pars):
 
@@ -82,12 +92,15 @@ class Model:
                                    WantTransfer=True,
                                    WantCls=False)
         
-        usezs = np.linspace(self.z-1.5, self.z+1.5, 20)[::-1]
+        usezs = np.linspace(self.z - 1.5, self.z + 1.5, 20)[::-1]
         usezs = usezs[usezs >= 0]
+        if not np.any(np.isclose(usezs, self.z)):
+            usezs = np.sort(np.append(usezs, self.z))[::-1]
         cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2)
 
         self.cosmo = camb.get_results(cambpars)
         self.pkm_interp = None
+        self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
     
 
     def _ensure_pk_interp(self):
@@ -169,8 +182,8 @@ class Model:
                 self.hod = hod.Zheng07(**pars)
             
             else:
-                raise Exception("Halo profile not recognized")
-    
+                raise Exception("HOD not recognized")
+
         elif isinstance(new_hod, hod.HOD):
                 self.hod = new_hod
 
@@ -197,34 +210,34 @@ class Model:
         self.check_HOD_defined()
         assert self.hod is not None
 
-        if self.n_gal is None or Ms is not None or recompute:
-            if Ms is None:
-                Ms = self.ms
-                hmf_arr = self._hmf_arr
-            else:
-                hmf_arr = None
+        if Ms is None:
+            if self.n_gal is not None and not recompute:
+                return self.n_gal
+            self.n_gal = self.HMF.halo_integral(self.ms, self.hod.N_hod(self.ms), hmf_arr=self._hmf_arr)
+            return self.n_gal
 
-            self.n_gal = self.HMF.halo_integral(Ms, self.hod.N_hod(Ms), hmf_arr=hmf_arr)
-
-        return self.n_gal
+        hmf_arr = self._hmf_arr if self._is_default_grid(Ms) else None
+        return self.HMF.halo_integral(Ms, self.hod.N_hod(Ms), hmf_arr=hmf_arr)
     
 
     def Pk_cs(self, Ms, u, ng):
         self.check_HOD_defined()
         assert self.hod is not None
 
+        hmf_arr = self._hmf_arr if self._is_default_grid(Ms) else None
         ave_ncns = self.hod.avg_NcNs(Ms)[None, :]
         igrand = ave_ncns * u
-        res = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr)
+        res = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=hmf_arr)
         return 2.0 * res / ng**2
 
     def Pk_ss(self, Ms, u, ng):
         self.check_HOD_defined()
         assert self.hod is not None
 
+        hmf_arr = self._hmf_arr if self._is_default_grid(Ms) else None
         ave_ns2 = self.hod.avg_Ns2(Ms)[None, :]
         igrand = ave_ns2 * u**2
-        res = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr)
+        res = self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=hmf_arr)
         return res / ng**2
 
     def Pk_1h(self, ks=None, Ms=None):
@@ -252,11 +265,16 @@ class Model:
 
         ng = self.galaxy_density(Ms)
         N_of_M = self.hod.N_hod(Ms)[None, :]
-        b_h = self._bias_arr[None, :]
+        if self._is_default_grid(Ms):
+            b_h = self._bias_arr[None, :]
+            hmf_arr = self._hmf_arr
+        else:
+            b_h = self.HMF.bias(Ms)[None, :]
+            hmf_arr = None
         u = self.prof.k_profile(ks, Ms)
 
         igrand = N_of_M * b_h * u
-        res = (self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=self._hmf_arr) / ng)**2
+        res = (self.HMF.halo_integral(Ms, igrand, axis=1, hmf_arr=hmf_arr) / ng)**2
 
         # matter_power_spectrum handles scalar and array z uniformly (grid=False for arrays)
         return self.matter_power_spectrum(ks, z) * res
@@ -336,7 +354,11 @@ class Model:
 
         if z_arr is None:
             z_arr = np.linspace(self.halo_data.z - 0.5, self.halo_data.z + 0.5, 51)
-        z_arr = z_arr[z_arr > 0]
+        z_arr = np.asarray(z_arr)
+        mask = z_arr > 0
+        if isinstance(nz, np.ndarray):
+            nz = nz[mask]
+        z_arr = z_arr[mask]
 
         if callable(nz):
             nz = np.asarray(nz(z_arr))

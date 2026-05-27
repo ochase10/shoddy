@@ -5,7 +5,7 @@ utility functions
 import numpy as np
 
 G = 4.30091727e-9 # km^2 * Mpc / s^2 / Msun
-C = 2.99792458e6  # km/s
+C = 2.99792458e5  # km/s
 LN10 = np.log(10)
 
 _trapz = getattr(np, 'trapezoid', np.trapz)

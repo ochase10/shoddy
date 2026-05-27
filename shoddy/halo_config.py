@@ -11,6 +11,7 @@ class HaloConfig:
                  dens_crit=1.686,
                  delta=200.,
                  mass_grid=None,
+                 z_sigma_idx=-1,
                  **kwargs):
 
         self.cosmo = cosmology
@@ -23,12 +24,12 @@ class HaloConfig:
 
         if mass_grid is None:
             mass_grid = np.logspace(9, 17, 256)
-        self._build_sigma_interp(mass_grid)
+        self._build_sigma_interp(mass_grid, z_sigma_idx)
 
-    def _build_sigma_interp(self, mass_grid):
+    def _build_sigma_interp(self, mass_grid, z_sigma_idx=-1):
         log_m = np.log10(mass_grid)
         r_lag = self.lagrangian_radius(mass_grid)
-        sig = self.cosmo.get_sigmaR(r_lag, z_indices=-1, hubble_units=False)
+        sig = self.cosmo.get_sigmaR(r_lag, z_indices=z_sigma_idx, hubble_units=False)
         log_sig = np.log10(sig)
         self._sigma_interp = make_interp_spline(log_m, log_sig, k=3)
         # pre-compute dlnsig/dlnM on the grid for use in hmf
