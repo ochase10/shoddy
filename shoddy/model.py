@@ -178,7 +178,15 @@ class Model:
             raise Exception("halo_prof argument must be string or HOD object")
         
         self.n_gal = None
-        
+
+
+    def update_hod_pars(self, **new_pars):
+        """Update HOD parameters and invalidate the cached galaxy density."""
+        self.check_HOD_defined()
+        assert self.hod is not None
+        self.hod.update_pars(**new_pars)
+        self.n_gal = None
+
 
     def check_HOD_defined(self):
         if self.hod is None:
