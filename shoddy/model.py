@@ -40,7 +40,10 @@ class Model:
         self.z = z
 
         if halo_mass_grid is not None:
-            self.ms = np.asarray(halo_mass_grid)
+            if len(halo_mass_grid) > 2:
+                self.ms = np.asarray(halo_mass_grid)
+            else:
+                raise ValueError("Halo mass grid must contain more than 2 values")
         else:
             self.ms = np.logspace(np.log10(1e9), np.log10(1e17), 256)
 
@@ -468,7 +471,7 @@ class Model:
             P_1h(k)  +  F(k)^2 * Pmm(k, z)
 
         where P_1h and F are z-independent.  Both are precomputed on an extended
-        k-grid [self.ks, 10^5 Mpc^-1] and interpolated via cubic splines, so the
+        k-grid [self.ks, 10^5 Mpc^-1] and interpolated, so the
         Limber integrand only evaluates the cheap CAMB Pmm call at the full set of
         k-z pairs.  The grid is extended beyond self.ks so the spline captures the
         natural NFW decay (P → 0) rather than terminating at a non-zero boundary
@@ -484,16 +487,22 @@ class Model:
         # Extend precomputed grid into high-k regime where u(k,M) → 0.
         # 12 log-spaced points from 2*k_max to 10^5 Mpc^-1 capture the NFW
         # tail so the spline decays smoothly instead of hitting a sharp boundary.
-        ks_hi  = np.geomspace(self.ks[-1] * 2, 1e5, 12)
-        u_hi   = self.prof._compute_profile(ks_hi, self.ms)         # (12, n_M)
-        p1h_hi = (2.0 * (self.hod.avg_NcNs(self.ms) * u_hi    @ self._halo_weights)
-                  +      (self.hod.avg_Ns2(self.ms)  * u_hi**2 @ self._halo_weights)) / ng**2
-        F_hi   = (N_hod * self._bias_arr * u_hi @ self._halo_weights) / ng
-
-        ks_full      = np.concatenate([self.ks, ks_hi])
+        if self.ks[-1] < 1e4:
+            ks_hi  = np.geomspace(self.ks[-1] * 2, 1e5, 12)
+            u_hi   = self.prof._compute_profile(ks_hi, self.ms)         # (12, n_M)
+            p1h_hi = (2.0 * (self.hod.avg_NcNs(self.ms) * u_hi    @ self._halo_weights)
+                    +      (self.hod.avg_Ns2(self.ms)  * u_hi**2 @ self._halo_weights)) / ng**2
+            F_hi   = (N_hod * self._bias_arr * u_hi @ self._halo_weights) / ng
+            ks_full      = np.concatenate([self.ks, ks_hi])
+            
+            p1h_full = np.concatenate([p1h_grid, p1h_hi])
+            F_full   = np.concatenate([F_grid,   F_hi])
+        else:
+            ks_full = self.ks
+            p1h_full = p1h_grid
+            F_full = F_grid
+        
         log_ks_full  = np.log(ks_full)
-        p1h_full = np.concatenate([p1h_grid, p1h_hi])
-        F_full   = np.concatenate([F_grid,   F_hi])
         ks_min, ks_max = ks_full[0], ks_full[-1]
 
         def _power(ks, z):
