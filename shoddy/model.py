@@ -9,6 +9,7 @@ import copy
 import camb
 import numpy as np
 from scipy.interpolate import make_interp_spline
+from scipy.stats import norm
 from mcfit import P2xi, Hankel
 
 
@@ -408,15 +409,15 @@ class Model:
             raise ValueError("z_arr must contain at least 2 positive redshift samples")
 
         if nz is None:
-            nz = np.ones_like(z_arr) / (z_arr[-1] - z_arr[0])
+            nz = norm.pdf(z_arr, self.z, 0.25)
         elif not callable(nz):
             nz = np.asarray(nz)
-            if len(nz) != len(mask):
+            if len(nz) != len(z_arr):
                 raise ValueError("nz array must match length of z_arr")
-            nz = nz[mask]
         else:
             nz = np.asarray(nz(z_arr))
-            nz /= _trapz(nz, z_arr)
+        
+        nz /= _trapz(nz, z_arr)
         
         h_z = self.halo_data.cosmo.hubble_parameter(z_arr)
         chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)
