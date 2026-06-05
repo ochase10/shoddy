@@ -20,7 +20,14 @@ class HaloConfig:
         self.delta = delta
 
         self.rhocrit = (3*self.cosmo.hubble_parameter(self.z)**2/(8*np.pi*G))
-        self.rho_m = self.rhocrit * (self.cosmo.get_Omega('cdm', self.z) + self.cosmo.get_Omega('baryon', self.z) + self.cosmo.get_Omega("nu", self.z))
+        # rho_m must be the comoving (present-day) mean matter density, not the
+        # physical density at z.  The Lagrangian radius R_L satisfies
+        # M = (4π/3) rho_m R_L^3 where rho_m is constant in comoving coords.
+        # Using rho_m(z) = rho_m0*(1+z)^3 would give a physical R_L that is
+        # (1+z) times too small, causing sigma(M) and dn/dM to be wrong at z>0.
+        H0 = self.cosmo.hubble_parameter(0)
+        rhocrit0 = 3 * H0**2 / (8 * np.pi * G)
+        self.rho_m = rhocrit0 * (self.cosmo.get_Omega('cdm', 0) + self.cosmo.get_Omega('baryon', 0) + self.cosmo.get_Omega("nu", 0))
 
         if mass_grid is None:
             mass_grid = np.logspace(9, 17, 256)
