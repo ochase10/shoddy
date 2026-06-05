@@ -543,3 +543,17 @@ class Model:
             theta_out = theta
 
         return wtheta, theta_out
+    
+    def galaxy_bias(self, Ms=None):
+        self.check_HOD_defined()
+        assert self.hod is not None
+
+        if Ms is None:
+            Ms = self.ms
+
+        ng = self.galaxy_density(Ms)
+        n_avg = self.hod.N_hod(Ms)
+        b_halo = self.HMF.bias(Ms)
+
+        return self.HMF.halo_integral(Ms, n_avg*b_halo) / ng
+        
