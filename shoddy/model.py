@@ -29,7 +29,7 @@ class Model:
             self,
             z=0,
             cosmo_pars=None,
-            hmf='tinker',
+            hmf='behroozi',
             halo_prof='nfw',
             hod=None,
             hod_pars={},
@@ -46,7 +46,7 @@ class Model:
             else:
                 raise ValueError("Halo mass grid must contain more than 2 values")
         else:
-            self.ms = np.logspace(np.log10(1e9), np.log10(1e17), 256)
+            self.ms = np.logspace(9, 16, 256)
 
         self.log_ms = np.log10(self.ms)
 
