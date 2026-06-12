@@ -22,7 +22,10 @@ class Model:
         'omk': 0.0,
         'As': 2e-9,
         'ns': 0.96,
-        'mnu': 0.0
+        'mnu': 0.0,
+        'lmax': 2000,
+        'WantTransfer': True,
+        'WantCls': False
     }
 
     def __init__(
@@ -42,7 +45,7 @@ class Model:
 
         if halo_mass_grid is not None:
             if len(halo_mass_grid) > 2:
-                self.ms = np.asarray(halo_mass_grid)
+                self.ms = np.asarray(halo_mass_grid).copy()
             else:
                 raise ValueError("Halo mass grid must contain more than 2 values")
         else:
@@ -51,7 +54,7 @@ class Model:
         self.log_ms = np.log10(self.ms)
 
         if k_grid is not None:
-            self.ks = np.asarray(k_grid)
+            self.ks = np.asarray(k_grid).copy()
         else:
             self.ks = np.logspace(np.log10(1e-4), np.log10(1e2), 1001)
 
@@ -97,10 +100,7 @@ class Model:
 
     def init_cosmo(self, pars):
 
-        cambpars = camb.set_params(**pars, 
-                                   lmax=2000,
-                                   WantTransfer=True,
-                                   WantCls=False)
+        cambpars = camb.set_params(**pars)
         
         usezs = np.linspace(self.z - 1.5, self.z + 1.5, 20)[::-1]
         usezs = usezs[usezs >= 0]
