@@ -47,7 +47,9 @@ class NFW(HaloProfile):
         if not isinstance(M, np.ndarray):
             M = np.array(M)
 
-        r_vir = self.config.rvir(M)
+        # rvir is a physical radius (M200c definition); k is a comoving
+        # wavenumber.  Convert to comoving so k*r is dimensionally consistent.
+        r_vir = self.config.rvir(M) * (1 + self.config.z)
         con = self.conc(M)
         r_s = r_vir/con
 
