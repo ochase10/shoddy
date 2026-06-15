@@ -102,11 +102,11 @@ class Model:
 
         cambpars = camb.set_params(**pars)
         
-        usezs = np.linspace(self.z - 1.5, self.z + 1.5, 20)[::-1]
+        usezs = np.concatenate((np.arange(self.z - 1.5, self.z, 0.1),np.arange(self.z, self.z+1.5, 0.1)))[::-1]
         usezs = usezs[usezs >= 0]
         if not np.any(np.isclose(usezs, self.z)):
             usezs = np.sort(np.append(usezs, self.z))[::-1]
-        cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2)
+        cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2, nonlinear=False)
 
         self.cosmo = camb.get_results(cambpars)
         self.pkm_interp = None
