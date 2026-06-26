@@ -19,6 +19,10 @@ dependencies = [
 [project.optional-dependencies]
 dev = ["pytest", "jupyter"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
 [tool.setuptools]
 packages = ["shoddy"]
 

@@ -1,9 +1,4 @@
 
-from . import mass_function, profile, hod
-from .utils import *
-from .utils import _trapz
-from .halo_config import HaloConfig
-
 import copy
 
 import camb
@@ -12,8 +7,21 @@ from scipy.interpolate import make_interp_spline
 from scipy.stats import norm
 from mcfit import P2xi, Hankel
 
+from . import mass_function, profile, hod
+from .utils import G, C, _trapz
+from .halo_config import HaloConfig
+from .caching import Cached, cached_quantity
 
-class Model:
+
+class Model(Cached):
+
+    # Registries mapping the string names accepted by the constructor and the
+    # set_* methods to their component classes.  Adding a new model is a single
+    # entry here rather than another branch in a dispatch chain.
+    _hmf_registry = {'tinker': mass_function.Tinker,
+                     'behroozi': mass_function.Behroozi13}
+    _profile_registry = {'nfw': profile.NFW}
+    _hod_registry = {'zheng07': hod.Zheng07}
 
     _default_cosmo_pars = {
         'H0': 70.,
@@ -72,31 +80,15 @@ class Model:
 
         self.set_hmf(hmf, self.halo_data)
         self.set_halo_profile(halo_prof, self.halo_data)
-        self._precompute_halo_arrays()
+        # Warm the NFW profile cache on self.ks so the first cf_ang/Pk call
+        # doesn't pay the sici computation cost.
+        self.prof.k_profile(self.ks, self.ms)
 
         if hod is not None:
             self.set_hod(hod, hod_pars)
         else:
             self.hod = None
 
-
-    def _is_default_grid(self, Ms):
-        return np.array_equal(Ms, self.ms)
-
-    def _precompute_halo_arrays(self):
-        self._hmf_arr = self.HMF.hmf(self.ms)
-        self._bias_arr = self.HMF.bias(self.ms)
-        # Trapezoid node weights for the fixed mass grid: w_i = dM_i such that
-        # sum(f * w) == trapz(f, ms) for any f.  Combined with _hmf_arr this
-        # gives _halo_weights so that f @ _halo_weights == halo_integral(ms, f).
-        trapz_w = np.empty_like(self.ms)
-        trapz_w[0] = (self.ms[1] - self.ms[0]) / 2
-        trapz_w[-1] = (self.ms[-1] - self.ms[-2]) / 2
-        trapz_w[1:-1] = (self.ms[2:] - self.ms[:-2]) / 2
-        self._halo_weights = self._hmf_arr * trapz_w
-        # Warm the NFW profile cache on self.ks so the first cf_ang call doesn't
-        # pay the sici computation cost.
-        self.prof.k_profile(self.ks, self.ms)
 
     def init_cosmo(self, pars):
 
@@ -109,15 +101,15 @@ class Model:
         cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2, nonlinear=False)
 
         self.cosmo = camb.get_results(cambpars)
-        self.pkm_interp = None
+        self._invalidate('pkm_interp')
         self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
-    
 
-    def _ensure_pk_interp(self):
-        if self.pkm_interp is None:
-            self.pkm_interp = self.cosmo.get_matter_power_interpolator(
-                nonlinear=False, hubble_units=False, k_hunit=False
-            )
+
+    @cached_quantity
+    def pkm_interp(self):
+        return self.cosmo.get_matter_power_interpolator(
+            nonlinear=False, hubble_units=False, k_hunit=False
+        )
 
     def matter_power_spectrum(self, ks, z=None):
         """
@@ -136,75 +128,55 @@ class Model:
         """
         if z is None:
             z = self.z
-        self._ensure_pk_interp()
-        assert self.pkm_interp is not None
         # grid=False for array z: evaluate at (k_i, z_i) pairs, not all combos
         grid = np.ndim(z) == 0
         return self.pkm_interp.P(z, ks, grid=grid).ravel()
 
 
+    @staticmethod
+    def _resolve_component(spec, registry, base, label, *args, **kwargs):
+        """Turn a name or instance into a component object.
+
+        A string is looked up (case-insensitively) in ``registry`` and the
+        matching class is instantiated with ``*args, **kwargs``; an existing
+        instance of ``base`` is returned unchanged.
+        """
+        if isinstance(spec, str):
+            try:
+                cls = registry[spec.lower()]
+            except KeyError:
+                raise ValueError(
+                    f"Unknown {label} '{spec}'. Options: {sorted(registry)}"
+                ) from None
+            return cls(*args, **kwargs)
+        if isinstance(spec, base):
+            return spec
+        raise TypeError(
+            f"{label} must be a str or {base.__name__} instance, got {type(spec).__name__}"
+        )
+
+
     def set_hmf(self, new_hmf, config, **kwargs):
-        if type(new_hmf) is str:
-            new_hmf = new_hmf.lower()
-
-            if new_hmf == 'tinker':
-                self.HMF = mass_function.Tinker(config, **kwargs)
-
-            elif new_hmf == 'behroozi':
-                self.HMF = mass_function.Behroozi13(config, **kwargs)
-            
-            else:
-                raise Exception("HMF not recognized")
-    
-        elif isinstance(new_hmf, mass_function.MassFunction):
-                self.HMF = new_hmf
-
-        else:
-            raise Exception("hmf argument must be string or MassFunction object")
-
-        if hasattr(self, '_hmf_arr'):
-            self._precompute_halo_arrays()
-            self.n_gal = None
+        self.HMF = self._resolve_component(
+            new_hmf, self._hmf_registry, mass_function.MassFunction, 'HMF', config, **kwargs
+        )
+        # The HMF feeds every halo-grid quantity and the galaxy density.
+        self._invalidate('_n_gal')
 
 
     def set_halo_profile(self, new_prof, config, **kwargs):
-        if type(new_prof) is str:
-            new_prof = new_prof.lower()
+        self.prof = self._resolve_component(
+            new_prof, self._profile_registry, profile.HaloProfile, 'halo profile', config, **kwargs
+        )
 
-            if new_prof == 'nfw':
-                self.prof = profile.NFW(config, **kwargs)
-            
-            else:
-                raise Exception("Halo profile not recognized")
-    
-        elif isinstance(new_prof, profile.HaloProfile):
-                self.prof = new_prof
 
-        else:
-            raise Exception("halo_prof argument must be string or HaloProfile object")
-        
-    
     def set_hod(self, new_hod, pars={}):
-        
-        if type(pars) is not dict:
-            raise Exception("HOD parameters argument should be type dict")
-        
-        elif type(new_hod) is str:
-            new_hod = new_hod.lower()
-
-            if new_hod == 'zheng07':
-                self.hod = hod.Zheng07(**pars)
-            
-            else:
-                raise Exception("HOD not recognized")
-
-        elif isinstance(new_hod, hod.HOD):
-                self.hod = new_hod
-
-        else:
-            raise Exception("hod argument must be string or HOD object")
-        
-        self.n_gal = None
+        if not isinstance(pars, dict):
+            raise TypeError("HOD parameters argument should be a dict")
+        self.hod = self._resolve_component(
+            new_hod, self._hod_registry, hod.HOD, 'HOD', **pars
+        )
+        self._invalidate('_n_gal')
 
 
     def update_hod_pars(self, **new_pars):
@@ -212,7 +184,7 @@ class Model:
         self.check_HOD_defined()
         assert self.hod is not None
         self.hod.update_pars(**new_pars)
-        self.n_gal = None
+        self._invalidate('_n_gal')
 
     def with_hod(self, hod_pars):
         """
@@ -238,10 +210,13 @@ class Model:
         assert self.hod is not None
         # Prime the power spectrum interpolator before copying so all copies
         # share the same object rather than each recreating it.
-        self._ensure_pk_interp()
+        _ = self.pkm_interp
         m = copy.copy(self)
         m.hod = type(self.hod)(**{**self.hod.pars, **hod_pars})
-        m.n_gal = None
+        # copy.copy shallow-copies __dict__, carrying over any cached n_gal from
+        # self; drop it so the new HOD's density is recomputed.  The shared HMF
+        # arrays and pk interpolator are intentionally kept by reference.
+        m._invalidate('_n_gal')
         return m
 
 
@@ -250,42 +225,39 @@ class Model:
             raise Exception("HOD must be defined to get galaxy density")
 
 
-    def galaxy_density(self, Ms=None, recompute=False):
+    @cached_quantity
+    def _n_gal(self):
+        # Galaxy density on the default grid; invalidated when the HOD changes
+        # (see set_hod / update_hod_pars / with_hod).
+        return float(self.HMF.halo_integral(self.ms, self.hod.N_hod(self.ms)))
+
+    def n_gal(self, Ms=None, recompute=False):
+        """Mean galaxy number density.  The default mass grid uses the cached
+        value; an explicit off-grid ``Ms`` is integrated fresh."""
         self.check_HOD_defined()
         assert self.hod is not None
-
-        if Ms is None:
-            if self.n_gal is not None and not recompute:
-                return self.n_gal
-            self.n_gal = float(self.hod.N_hod(self.ms) @ self._halo_weights)
-            return self.n_gal
-
-        hmf_arr = self._hmf_arr if self._is_default_grid(Ms) else None
-        return self.HMF.halo_integral(Ms, self.hod.N_hod(Ms), hmf_arr=hmf_arr)
+        
+        if Ms is None or np.array_equal(Ms, self.ms):
+            if recompute:
+                self._invalidate('_n_gal')
+            return self._n_gal
+        return float(self.HMF.halo_integral(Ms, self.hod.N_hod(Ms)))
     
 
     def Pk_cs(self, Ms, u, ng):
         self.check_HOD_defined()
         assert self.hod is not None
 
-        ave_ncns = self.hod.avg_NcNs(Ms)[None, :]
-        igrand = ave_ncns * u
-        if self._is_default_grid(Ms):
-            res = igrand @ self._halo_weights
-        else:
-            res = self.HMF.halo_integral(Ms, igrand, axis=1)
+        igrand = self.hod.avg_NcNs(Ms)[None, :] * u
+        res = self.HMF.halo_integral(Ms, igrand, axis=1)
         return 2.0 * res / ng**2
 
     def Pk_ss(self, Ms, u, ng):
         self.check_HOD_defined()
         assert self.hod is not None
 
-        ave_ns2 = self.hod.avg_Ns2(Ms)[None, :]
-        igrand = ave_ns2 * u**2
-        if self._is_default_grid(Ms):
-            res = igrand @ self._halo_weights
-        else:
-            res = self.HMF.halo_integral(Ms, igrand, axis=1)
+        igrand = self.hod.avg_Ns2(Ms)[None, :] * u**2
+        res = self.HMF.halo_integral(Ms, igrand, axis=1)
         return res / ng**2
 
     def Pk_1h(self, ks=None, Ms=None):
@@ -297,7 +269,7 @@ class Model:
         if ks is None:
             ks = self.ks
 
-        ng = self.galaxy_density(Ms)
+        ng = self.n_gal(Ms)
         u = self.prof.k_profile(ks, Ms)
 
         return self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
@@ -311,16 +283,10 @@ class Model:
         if ks is None:
             ks = self.ks
 
-        ng = self.galaxy_density(Ms)
+        ng = self.n_gal(Ms)
         u = self.prof.k_profile(ks, Ms)
-        N_of_M = self.hod.N_hod(Ms)
-
-        if self._is_default_grid(Ms):
-            igrand = N_of_M * self._bias_arr * u
-            res = (igrand @ self._halo_weights / ng) ** 2
-        else:
-            igrand = N_of_M[None, :] * self.HMF.bias(Ms)[None, :] * u
-            res = (self.HMF.halo_integral(Ms, igrand, axis=1) / ng) ** 2
+        igrand = self.hod.N_hod(Ms)[None, :] * self.HMF.bias(Ms)[None, :] * u
+        res = (self.HMF.halo_integral(Ms, igrand, axis=1) / ng) ** 2
 
         # matter_power_spectrum handles scalar and array z uniformly (grid=False for arrays)
         return self.matter_power_spectrum(ks, z) * res
@@ -479,11 +445,13 @@ class Model:
         value, which would otherwise produce spurious power at high Limber l.
         """
         assert self.hod is not None
-        ng       = self.galaxy_density()
+        ng       = self.n_gal()
         p1h_grid = self.Pk_1h()                         # (n_k,) on self.ks via dot products
         u_grid   = self.prof.k_profile(self.ks, self.ms)  # (n_k, n_M) — cache hit
         N_hod    = self.hod.N_hod(self.ms)              # (n_M,)
-        F_grid   = (N_hod * self._bias_arr * u_grid @ self._halo_weights) / ng  # (n_k,)
+        bias     = self.HMF.bias(self.ms)                  # (n_M,) — cached on the HMF
+        weights  = self.HMF.integration_weights(self.ms)   # (n_M,) — cached on the HMF
+        F_grid   = (N_hod * bias * u_grid @ weights) / ng  # (n_k,)
 
         # Extend precomputed grid into high-k regime where u(k,M) → 0.
         # 12 log-spaced points from 2*k_max to 10^5 Mpc^-1 capture the NFW
@@ -491,9 +459,9 @@ class Model:
         if self.ks[-1] < 1e4:
             ks_hi  = np.geomspace(self.ks[-1] * 2, 1e5, 12)
             u_hi   = self.prof._compute_profile(ks_hi, self.ms)         # (12, n_M)
-            p1h_hi = (2.0 * (self.hod.avg_NcNs(self.ms) * u_hi    @ self._halo_weights)
-                    +      (self.hod.avg_Ns2(self.ms)  * u_hi**2 @ self._halo_weights)) / ng**2
-            F_hi   = (N_hod * self._bias_arr * u_hi @ self._halo_weights) / ng
+            p1h_hi = (2.0 * (self.hod.avg_NcNs(self.ms) * u_hi    @ weights)
+                    +      (self.hod.avg_Ns2(self.ms)  * u_hi**2 @ weights)) / ng**2
+            F_hi   = (N_hod * bias * u_hi @ weights) / ng
             ks_full      = np.concatenate([self.ks, ks_hi])
             
             p1h_full = np.concatenate([p1h_grid, p1h_hi])
@@ -551,7 +519,7 @@ class Model:
         if Ms is None:
             Ms = self.ms
 
-        ng = self.galaxy_density(Ms)
+        ng = self.n_gal(Ms)
         n_avg = self.hod.N_hod(Ms)
         b_halo = self.HMF.bias(Ms)
 

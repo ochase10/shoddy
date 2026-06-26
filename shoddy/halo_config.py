@@ -31,6 +31,7 @@ class HaloConfig:
 
         if mass_grid is None:
             mass_grid = np.logspace(9, 17, 256)
+        self.mass_grid = mass_grid
         self._build_sigma_interp(mass_grid, z_sigma_idx)
 
     def _build_sigma_interp(self, mass_grid, z_sigma_idx=-1):

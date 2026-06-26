@@ -217,6 +217,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 
-
-
-tests/
+# Exploratory notebooks under tests/ are not tracked, but the pytest suite is.
+tests/*.ipynb
