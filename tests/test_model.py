@@ -97,9 +97,9 @@ def test_pk_shapes(model_with_hod):
     assert m.P_gal().shape == m.ks.shape
 
 
-def test_pgal_is_sum_of_terms_without_truncation(model_with_hod):
+def test_pgal_is_sum_of_terms_without_damping(model_with_hod):
     m = model_with_hod
-    total = m.P_gal(trunc_1h_k=None)
+    total = m.P_gal(damp_1h_k=None)
     assert np.allclose(total, m.Pk_1h() + m.Pk_2h())
 
 
@@ -160,13 +160,17 @@ def test_with_hod_matches_fresh_set(model_with_hod):
 
 # --- Numerical regression snapshots --------------------------------------------
 
+# Captured after the 1-halo low-k damping changed from a fixed exponential
+# truncation to the z-aware Gaussian form (P_gal_0/P_gal_500 shifted), in the
+# c3d environment (CAMB-dependent values drift at the ~1e-9 level between
+# environments).
 REGRESSION = {
-    "n_gal": 0.0035734281865427413,
-    "galaxy_bias": 1.203512614166429,
-    "Pk_1h_0": 1569.2686338368253,
-    "Pk_2h_0": 2656.2347901282096,
-    "P_gal_0": 2671.849273927102,
-    "P_gal_500": 15900.412581237228,
+    "n_gal": 0.0035734281857500074,
+    "galaxy_bias": 1.2035126140927694,
+    "Pk_1h_0": 1569.2686435588319,
+    "Pk_2h_0": 2656.234789803066,
+    "P_gal_0": 2656.2380117366606,
+    "P_gal_500": 15699.660299045367,
 }
 
 
@@ -186,9 +190,9 @@ def test_regression_snapshots(model_with_hod):
 
 def test_regression_cf_3d(model_with_hod):
     xi, _ = model_with_hod.cf_3d(rs=[1.0, 10.0])
-    assert np.allclose(xi, [75.20347258, 0.87234293], rtol=1e-6)
+    assert np.allclose(xi, [75.20147783, 0.86191710], rtol=1e-6)
 
 
 def test_regression_cf_ang(model_with_hod):
     w, _ = model_with_hod.cf_ang(theta=[0.01, 0.1])
-    assert np.allclose(w, [1.51871751, 0.20333101], rtol=1e-6)
+    assert np.allclose(w, [1.51972257, 0.20292244], rtol=1e-6)

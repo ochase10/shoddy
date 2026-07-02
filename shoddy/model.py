@@ -101,7 +101,7 @@ class Model(Cached):
         cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2, nonlinear=False)
 
         self.cosmo = camb.get_results(cambpars)
-        self._invalidate('pkm_interp')
+        self._invalidate('pkm_interp', 'k_damp_1h')
         self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
 
 
@@ -131,6 +131,48 @@ class Model(Cached):
         # grid=False for array z: evaluate at (k_i, z_i) pairs, not all combos
         grid = np.ndim(z) == 0
         return self.pkm_interp.P(z, ks, grid=grid).ravel()
+
+
+    @cached_quantity
+    def k_damp_1h(self):
+        """
+        Default 1-halo damping wavenumber k* [1/Mpc] at the model redshift.
+
+        k* = 0.584/sigma_d, where sigma_d is the rms linear (Zel'dovich)
+        displacement, sigma_d^2 = (1/6 pi^2) ∫ P_lin(k) dk.  The coefficient is
+        the HMcode value (Mead et al. 2015); the damping it feeds (see
+        ``_apply_1h_damping``) suppresses the unphysical 1-halo plateau below
+        the halo scale.  sigma_d shrinks with z, so k* grows and the damping
+        tracks the nonlinear scale instead of sitting at a fixed comoving k.
+        """
+        ks = np.geomspace(1e-4, 1e2, 512)
+        sig_d2 = _trapz(self.matter_power_spectrum(ks), ks) / (6 * np.pi**2)
+        return 0.584 / np.sqrt(sig_d2)
+
+    def _resolve_k_damp(self, damp_1h_k):
+        """Map the ``damp_1h_k`` argument to a wavenumber: 'auto' -> the
+        z-aware default, a float -> itself, None -> no damping."""
+        if isinstance(damp_1h_k, str):
+            if damp_1h_k != 'auto':
+                raise ValueError(f"damp_1h_k must be 'auto', a wavenumber, or None; got '{damp_1h_k}'")
+            return self.k_damp_1h
+        return damp_1h_k
+
+    @staticmethod
+    def _apply_1h_damping(p_1h, ks, k_star):
+        """Suppress the 1-halo shot-noise plateau below the halo scale.
+
+        Mass conservation forbids the plateau from persisting to k -> 0, and
+        transforming it leaks FFTLog ringing across all r beyond the halo
+        scale.  The Gaussian form (HMcode, Mead et al. 2015) removes it with a
+        compensation that is non-oscillatory and decays superexponentially in
+        configuration space; a (k/k*)^4/(1+(k/k*)^4) damping instead imprints
+        a damped cosine of wavelength 2*pi*sqrt(2)/k* on xi_1h out to
+        ~100 Mpc at percent-level amplitude.
+        """
+        if k_star is None:
+            return p_1h
+        return p_1h * -np.expm1(-(np.asarray(ks) / k_star)**2)
 
 
     @staticmethod
@@ -292,7 +334,14 @@ class Model(Cached):
         return self.matter_power_spectrum(ks, z) * res
 
 
-    def P_gal(self, ks=None, z=None, Ms=None, trunc_1h_k=1e-2):
+    def P_gal(self, ks=None, z=None, Ms=None, damp_1h_k='auto'):
+        """
+        Total galaxy power spectrum, 1-halo + 2-halo.
+
+        ``damp_1h_k`` controls the low-k suppression of the 1-halo plateau
+        (see ``_apply_1h_damping``): 'auto' (default) uses the z-aware scale
+        ``k_damp_1h``, a float sets k* directly, None disables it.
+        """
         self.check_HOD_defined()
         assert self.hod is not None
 
@@ -303,9 +352,9 @@ class Model(Cached):
         else:
             ks = np.asarray(ks)
 
-        p_1h = self.Pk_1h(ks=ks, Ms=Ms)
-        if trunc_1h_k is not None:
-            p_1h *= (1 - np.exp(-ks/trunc_1h_k))
+        p_1h = self._apply_1h_damping(
+            self.Pk_1h(ks=ks, Ms=Ms), ks, self._resolve_k_damp(damp_1h_k)
+        )
 
         return p_1h + self.Pk_2h(ks=ks, Ms=Ms, z=z)
 
@@ -410,20 +459,61 @@ class Model(Cached):
         return cl, ls
     
 
-    def cf_3d(self, rs=None, Ms=None, ks=None, power=None):
+    # Comoving k [1/Mpc] by which the profile of any occupied halo has decayed;
+    # 1-halo grids are extended to here so FFTLog sees the full 1-halo falloff.
+    _K_1H_MAX = 1e5
 
+    def _pk_1h_extended(self, ks, Ms):
+        """P_1h on a log-uniform k-grid reaching ``_K_1H_MAX``.
+
+        At z ≳ 2 the small halos that dominate the 1-halo term have not decayed
+        by the default k_max = 100/Mpc, and FFTLog-transforming the chopped
+        function rings at all r beyond the halo scale.  P_1h needs no CAMB
+        call, so it can be evaluated well past the CAMB grid for the cost of a
+        few sici calls.  FFTLog needs uniform log spacing, so rather than
+        appending points the grid is rebuilt at the input's density per decade.
+        """
+        if ks[-1] >= self._K_1H_MAX / 10:
+            return ks, self.Pk_1h(ks=ks, Ms=Ms)
+        n = int(np.ceil(len(ks) * np.log10(self._K_1H_MAX / ks[0])
+                        / np.log10(ks[-1] / ks[0])))
+        ks_ext = np.geomspace(ks[0], self._K_1H_MAX, n)
+        ng = self.n_gal(Ms)
+        # _compute_profile bypasses the profile's single-slot cache so the
+        # warm self.ks entry survives for later P_gal / cf_ang calls.
+        u = self.prof._compute_profile(ks_ext, Ms)
+        return ks_ext, self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
+
+    def cf_3d(self, rs=None, Ms=None, ks=None, power=None, damp_1h_k='auto'):
+        """
+        3-D galaxy correlation function via FFTLog.
+
+        When ``power`` is None the 1- and 2-halo terms are transformed
+        separately: the 2-halo term on ``ks`` (bounded by the CAMB k range)
+        and the 1-halo term on the extended grid from ``_pk_1h_extended``,
+        with the low-k plateau damped per ``damp_1h_k`` (see ``P_gal``).
+        An explicit ``power`` array is transformed on ``ks`` as-is.
+        """
         if Ms is None:
             Ms = self.ms
         if ks is None:
             ks = self.ks
 
-        if power is not None and len(power) != len(ks):
-            raise ValueError("Power spectrum array length must match k array")
-
-        if power is None:
-            power = self.P_gal(ks=ks, Ms=Ms)
-
-        r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(power, extrap=True)
+        if power is not None:
+            if len(power) != len(ks):
+                raise ValueError("Power spectrum array length must match k array")
+            r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(power, extrap=True)
+        else:
+            self.check_HOD_defined()
+            r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(
+                self.Pk_2h(ks=ks, Ms=Ms), extrap=True
+            )
+            ks_1h, p_1h = self._pk_1h_extended(ks, Ms)
+            p_1h = self._apply_1h_damping(p_1h, ks_1h, self._resolve_k_damp(damp_1h_k))
+            r_1h, xi_1h = P2xi(ks_1h, l=0, q=1.5, lowring=True)(p_1h, extrap=True)
+            # The two transforms return different r grids; xi_1h is smooth and
+            # ~0 at both ends of the overlap, so linear interpolation is safe.
+            xi = xi + np.interp(np.log(r), np.log(r_1h), xi_1h)
 
         if rs is not None:
             xi = make_interp_spline(r, xi)(rs)
@@ -431,7 +521,7 @@ class Model(Cached):
 
         return xi, r
 
-    def _build_fast_power_func(self, trunc_1h_k):
+    def _build_fast_power_func(self, k_star):
         """
         Return a fast Limber power function by exploiting that P_gal(k, z) splits as
 
@@ -443,6 +533,8 @@ class Model(Cached):
         k-z pairs.  The grid is extended beyond self.ks so the spline captures the
         natural NFW decay (P → 0) rather than terminating at a non-zero boundary
         value, which would otherwise produce spurious power at high Limber l.
+        The 1-halo damping (``k_star``, see ``_apply_1h_damping``) is baked into
+        the precomputed P_1h.
         """
         assert self.hod is not None
         ng       = self.n_gal()
@@ -453,52 +545,61 @@ class Model(Cached):
         weights  = self.HMF.integration_weights(self.ms)   # (n_M,) — cached on the HMF
         F_grid   = (N_hod * bias * u_grid @ weights) / ng  # (n_k,)
 
-        # Extend precomputed grid into high-k regime where u(k,M) → 0.
-        # 12 log-spaced points from 2*k_max to 10^5 Mpc^-1 capture the NFW
-        # tail so the spline decays smoothly instead of hitting a sharp boundary.
-        if self.ks[-1] < 1e4:
-            ks_hi  = np.geomspace(self.ks[-1] * 2, 1e5, 12)
-            u_hi   = self.prof._compute_profile(ks_hi, self.ms)         # (12, n_M)
+        # Extend precomputed grid into high-k regime where u(k,M) → 0, at
+        # ~10 points per decade, so the interpolant decays smoothly instead of
+        # hitting a sharp boundary.
+        if self.ks[-1] < self._K_1H_MAX / 10:
+            n_hi   = int(np.ceil(10 * np.log10(self._K_1H_MAX / (2 * self.ks[-1]))))
+            ks_hi  = np.geomspace(self.ks[-1] * 2, self._K_1H_MAX, n_hi)
+            u_hi   = self.prof._compute_profile(ks_hi, self.ms)         # (n_hi, n_M)
             p1h_hi = (2.0 * (self.hod.avg_NcNs(self.ms) * u_hi    @ weights)
                     +      (self.hod.avg_Ns2(self.ms)  * u_hi**2 @ weights)) / ng**2
             F_hi   = (N_hod * bias * u_hi @ weights) / ng
             ks_full      = np.concatenate([self.ks, ks_hi])
-            
+
             p1h_full = np.concatenate([p1h_grid, p1h_hi])
             F_full   = np.concatenate([F_grid,   F_hi])
         else:
             ks_full = self.ks
             p1h_full = p1h_grid
             F_full = F_grid
-        
+
+        p1h_full = self._apply_1h_damping(p1h_full, ks_full, k_star)
+
         log_ks_full  = np.log(ks_full)
         ks_min, ks_max = ks_full[0], ks_full[-1]
+        # Interpolate in log-log: P_1h and F fall by many decades across the
+        # sparse high-k extension, where linear-in-P segments put kinks into
+        # C_l at high Limber l.  Power-law stretches (including the baked-in
+        # low-k damping) are exact in log-log.  The floor keeps log() finite
+        # if a tail value underflows to zero.
+        log_p1h = np.log(np.clip(p1h_full, 1e-300, None))
+        log_F   = np.log(np.clip(F_full,   1e-300, None))
 
         def _power(ks, z):
             # np.interp is ~9x faster than a scipy B-spline at 51k evaluation
-            # points and accurate to < 0.01% on this 1013-point log-k grid.
+            # points and accurate to < 0.01% on this ~1030-point log-k grid.
             log_k = np.log(np.clip(ks, ks_min, ks_max))
-            p1h = np.interp(log_k, log_ks_full, p1h_full)
-            if trunc_1h_k is not None:
-                p1h *= (1 - np.exp(-ks / trunc_1h_k))
-            F = np.interp(log_k, log_ks_full, F_full)
+            p1h = np.exp(np.interp(log_k, log_ks_full, log_p1h))
+            F   = np.exp(np.interp(log_k, log_ks_full, log_F))
             result = p1h + F**2 * self.matter_power_spectrum(ks, z)
-            return np.maximum(0.0, result)   # guard against rounding below 0 at extremes
+            return np.maximum(0.0, result)   # guard against Pmm rounding below 0 at extremes
 
         return _power
 
-    def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, trunc_1h_k=1e-2):
+    def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h_k='auto'):
 
         if power_func is None:
             self.check_HOD_defined()
+            k_star = self._resolve_k_damp(damp_1h_k)
             # Fast path: precompute z-independent quantities on self.ks and
             # interpolate, avoiding large halo integrals at every Limber k-value.
             # Falls back to the full P_gal when a custom Ms grid is requested.
             if Ms is None:
-                power_func = self._build_fast_power_func(trunc_1h_k)
+                power_func = self._build_fast_power_func(k_star)
             else:
                 assert self.hod is not None
-                power_func = lambda ks, z: self.P_gal(ks=ks, z=z, Ms=Ms, trunc_1h_k=trunc_1h_k)
+                power_func = lambda ks, z: self.P_gal(ks=ks, z=z, Ms=Ms, damp_1h_k=k_star)
 
         cl, ls = self.limber_cl(power_func, z_arr=z_arr, nz=nz, ls=ls)
 
