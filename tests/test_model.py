@@ -136,6 +136,19 @@ def test_cf_ang_at_requested_theta(model_with_hod):
     assert w[0] > w[1]
 
 
+def test_cf_3d_total_not_below_2h(model_with_hod):
+    # xi_1h is a pair count and hence non-negative, so the total must not dip
+    # below the 2-halo term.  The k-space Gaussian damping violates this by
+    # construction (its compensation drives xi_1h negative near the 1-to-2-halo
+    # transition), which is why cf_3d defaults to damp_1h_k=None; transform
+    # artifacts are allowed at the few-per-mille level.
+    m = model_with_hod
+    xi, r = m.cf_3d()
+    xi2, _ = m.cf_3d(power=m.Pk_2h())
+    sel = (r > 0.1) & (r < 100) & (xi2 > 0)
+    assert np.min((xi[sel] - xi2[sel]) / xi2[sel]) > -5e-3
+
+
 def test_limber_cl_array_nz_requires_zarr(model_with_hod):
     with pytest.raises(ValueError):
         model_with_hod.limber_cl(None, nz=np.ones(5))
@@ -189,10 +202,12 @@ def test_regression_snapshots(model_with_hod):
 
 
 def test_regression_cf_3d(model_with_hod):
+    # Captured with the undamped default (damp_1h_k=None) in the c3d env.
     xi, _ = model_with_hod.cf_3d(rs=[1.0, 10.0])
-    assert np.allclose(xi, [75.20147783, 0.86191710], rtol=1e-6)
+    assert np.allclose(xi, [75.21341329, 0.87249875], rtol=1e-6)
 
 
 def test_regression_cf_ang(model_with_hod):
+    # Captured with the undamped default (damp_1h_k=None) in the c3d env.
     w, _ = model_with_hod.cf_ang(theta=[0.01, 0.1])
-    assert np.allclose(w, [1.51972257, 0.20292244], rtol=1e-6)
+    assert np.allclose(w, [1.52010388, 0.20330296], rtol=1e-6)

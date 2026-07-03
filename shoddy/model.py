@@ -162,13 +162,24 @@ class Model(Cached):
     def _apply_1h_damping(p_1h, ks, k_star):
         """Suppress the 1-halo shot-noise plateau below the halo scale.
 
-        Mass conservation forbids the plateau from persisting to k -> 0, and
-        transforming it leaks FFTLog ringing across all r beyond the halo
-        scale.  The Gaussian form (HMcode, Mead et al. 2015) removes it with a
-        compensation that is non-oscillatory and decays superexponentially in
-        configuration space; a (k/k*)^4/(1+(k/k*)^4) damping instead imprints
-        a damped cosine of wavelength 2*pi*sqrt(2)/k* on xi_1h out to
-        ~100 Mpc at percent-level amplitude.
+        Mass conservation forbids the plateau from persisting to k -> 0 in
+        P(k), so ``P_gal`` damps it by default.  The Gaussian form (HMcode,
+        Mead et al. 2015) is the gentlest choice: its compensation is
+        non-oscillatory and decays superexponentially in configuration space,
+        whereas e.g. (k/k*)^4/(1+(k/k*)^4) imprints a damped cosine of
+        wavelength 2*pi*sqrt(2)/k* on xi_1h out to ~100 Mpc.
+
+        No form is artifact-free in configuration space, though: forcing
+        P_1h(0) = 0 forces ∫ r^2 xi_1h dr = 0, so the damped xi_1h *must* go
+        negative — the Gaussian's compensation is a negative pedestal of
+        depth ~ P_1h(0) k*^3 / (8 pi^{3/2}) over r ≲ 2/k*, which lands right
+        at the 1-to-2-halo transition and pulls xi_gal below xi_2h there.
+        The undamped plateau, by contrast, is a pure zero-lag (delta at
+        r = 0) term that is invisible at any finite separation, so ``cf_3d``
+        and ``cf_ang`` default to no damping and are exact where damping is
+        approximate; ringing from the plateau is not a concern there because
+        the 1-halo term is transformed on its own extended k-grid (see
+        ``_pk_1h_extended``).
         """
         if k_star is None:
             return p_1h
@@ -484,15 +495,19 @@ class Model(Cached):
         u = self.prof._compute_profile(ks_ext, Ms)
         return ks_ext, self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
 
-    def cf_3d(self, rs=None, Ms=None, ks=None, power=None, damp_1h_k='auto'):
+    def cf_3d(self, rs=None, Ms=None, ks=None, power=None, damp_1h_k=None):
         """
         3-D galaxy correlation function via FFTLog.
 
         When ``power`` is None the 1- and 2-halo terms are transformed
         separately: the 2-halo term on ``ks`` (bounded by the CAMB k range)
-        and the 1-halo term on the extended grid from ``_pk_1h_extended``,
-        with the low-k plateau damped per ``damp_1h_k`` (see ``P_gal``).
+        and the 1-halo term on the extended grid from ``_pk_1h_extended``.
         An explicit ``power`` array is transformed on ``ks`` as-is.
+
+        ``damp_1h_k`` defaults to None (no damping), unlike ``P_gal``: the
+        1-halo plateau only contributes to xi at zero lag, while damping it
+        necessarily drives xi_1h negative around the 1-to-2-halo transition
+        (see ``_apply_1h_damping``).
         """
         if Ms is None:
             Ms = self.ms
@@ -587,8 +602,16 @@ class Model(Cached):
 
         return _power
 
-    def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h_k='auto'):
+    def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h_k=None):
+        """
+        Angular galaxy correlation function w(theta) via Limber + Hankel.
 
+        ``damp_1h_k`` defaults to None (no damping), unlike ``P_gal``: the
+        1-halo plateau contributes a flat, shot-noise-like C_l whose Hankel
+        transform lives at theta = 0 only, while damping it necessarily
+        drives w_1h negative around the 1-to-2-halo transition (see
+        ``_apply_1h_damping``).
+        """
         if power_func is None:
             self.check_HOD_defined()
             k_star = self._resolve_k_damp(damp_1h_k)
