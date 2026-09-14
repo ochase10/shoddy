@@ -1,5 +1,6 @@
 
 import copy
+import warnings
 
 import camb
 import numpy as np
@@ -36,6 +37,14 @@ class Model(Cached):
         'WantCls': False
     }
 
+    # Redshift grid handed to CAMB's matter-power output.  The transfer-function
+    # solve dominates the cost, so extra output redshifts are nearly free (140
+    # points over z=6-20 costs ~0.1 s more than 30 points over z+-1.5); the grid
+    # is therefore generous by default.  CAMB caps the list at 256.
+    _Z_PAD = 3.
+    _Z_STEP = 0.1
+    _Z_MAX_PTS = 256
+
     def __init__(
             self,
             z=0,
@@ -46,6 +55,7 @@ class Model(Cached):
             hod_pars={},
             halo_mass_grid=None,
             k_grid=None,
+            z_range=None,
             **kwargs
     ):
         
@@ -73,7 +83,7 @@ class Model(Cached):
 
         self.rhocrit0 = (3*self.cosmo_pars['H0']**2/(8*np.pi*G)) # Msun / Mpc^3
     
-        self.init_cosmo(self.cosmo_pars)
+        self.init_cosmo(self.cosmo_pars, z_range=z_range)
         ###
 
         self.halo_data = HaloConfig(self.cosmo, z, mass_grid=self.ms, z_sigma_idx=self._z_sigma_idx, **kwargs)
@@ -90,14 +100,34 @@ class Model(Cached):
             self.hod = None
 
 
-    def init_cosmo(self, pars):
+    def init_cosmo(self, pars, z_range=None):
+        """Run CAMB and cache the results.
+
+        ``z_range`` sets the span of the matter-power output grid.  Pass the
+        support of the n(z) being projected: outside the grid CAMB's
+        interpolator *clamps* rather than extrapolating, silently, so a
+        too-narrow grid biases any Limber integral with long tails.
+        """
 
         cambpars = camb.set_params(**pars)
-        
-        usezs = np.concatenate((np.arange(self.z - 1.5, self.z, 0.1),np.arange(self.z, self.z+1.5, 0.1)))[::-1]
-        usezs = usezs[usezs >= 0]
+
+        if z_range is None:
+            lo, hi = self.z - self._Z_PAD, self.z + self._Z_PAD
+        else:
+            lo, hi = min(z_range), max(z_range)
+
+        # the model redshift must land inside the grid whatever was requested
+        lo = max(0., min(lo, self.z))
+        hi = max(hi, self.z)
+
+        # point count rather than fixed spacing, so a very wide request degrades
+        # to a coarser grid instead of tripping CAMB's 256-redshift cap
+        npts = int(np.clip(round((hi - lo) / self._Z_STEP) + 1, 2, self._Z_MAX_PTS - 1))
+        usezs = np.linspace(lo, hi, npts)
         if not np.any(np.isclose(usezs, self.z)):
-            usezs = np.sort(np.append(usezs, self.z))[::-1]
+            usezs = np.append(usezs, self.z)
+        usezs = np.sort(usezs)[::-1]
+
         cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2, nonlinear=False)
 
         self.cosmo = camb.get_results(cambpars)
@@ -433,6 +463,14 @@ class Model(Cached):
         z_arr = z_arr[mask]
         if len(z_arr) < 2:
             raise ValueError("z_arr must contain at least 2 positive redshift samples")
+
+        pk_zmin, pk_zmax = self.pkm_interp.zmin, self.pkm_interp.zmax
+        if z_arr.min() < pk_zmin or z_arr.max() > pk_zmax:
+            warnings.warn(
+                f"z_arr spans [{z_arr.min():.2f}, {z_arr.max():.2f}] but the matter "
+                f"power interpolator covers only [{pk_zmin:.2f}, {pk_zmax:.2f}]. CAMB "
+                f"clamps outside this range rather than extrapolating. Pass "
+                f"z_range=(zmin, zmax) to Model() to widen it.")
 
         if nz is None:
             nz = norm.pdf(z_arr, self.z, 0.25)
