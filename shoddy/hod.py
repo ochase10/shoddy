@@ -63,10 +63,13 @@ class Zheng07(HOD):
 
 
     def centrals(self, M_halo) -> NDArray[np.floating]:
-        return 0.5 * self.pars['dc'] * (1 + erf((np.log10(M_halo) - np.log10(self.pars['M_min'])) / self.pars['sig_logM']))
+        return 0.5 * (1 + erf((np.log10(M_halo) - np.log10(self.pars['M_min'])) / self.pars['sig_logM']))
 
     def satellites(self, M_halo) -> NDArray[np.floating]:
-        return self.pars['dc'] * (np.where(M_halo>self.pars['M0'],(M_halo - self.pars['M0']),0) / self.pars['M1'])**self.pars['alpha'] * self.centrals(M_halo)
+        return (np.where(M_halo>self.pars['M0'],(M_halo - self.pars['M0']),0) / self.pars['M1'])**self.pars['alpha'] * self.centrals(M_halo)
+
+    def N_hod(self, M_halo) -> NDArray[np.floating]:
+            return self.pars['dc'] * (self.centrals(M_halo) + self.satellites(M_halo))
     
     def __str__(self) -> str:
         return 'Zheng07' #TODO add current pars to print

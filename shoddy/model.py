@@ -16,9 +16,7 @@ from .caching import Cached, cached_quantity
 
 class Model(Cached):
 
-    # Registries mapping the string names accepted by the constructor and the
-    # set_* methods to their component classes.  Adding a new model is a single
-    # entry here rather than another branch in a dispatch chain.
+    # Strings to reference specific models
     _hmf_registry = {'tinker': mass_function.Tinker,
                      'behroozi': mass_function.Behroozi13}
     _profile_registry = {'nfw': profile.NFW}
@@ -37,10 +35,7 @@ class Model(Cached):
         'WantCls': False
     }
 
-    # Redshift grid handed to CAMB's matter-power output.  The transfer-function
-    # solve dominates the cost, so extra output redshifts are nearly free (140
-    # points over z=6-20 costs ~0.1 s more than 30 points over z+-1.5); the grid
-    # is therefore generous by default.  CAMB caps the list at 256.
+    # CAMB caps z grid length at 256
     _Z_PAD = 3.
     _Z_STEP = 0.1
     _Z_MAX_PTS = 256
@@ -101,12 +96,8 @@ class Model(Cached):
 
 
     def init_cosmo(self, pars, z_range=None):
-        """Run CAMB and cache the results.
-
-        ``z_range`` sets the span of the matter-power output grid.  Pass the
-        support of the n(z) being projected: outside the grid CAMB's
-        interpolator *clamps* rather than extrapolating, silently, so a
-        too-narrow grid biases any Limber integral with long tails.
+        """
+        Run CAMB and cache the results.
         """
 
         cambpars = camb.set_params(**pars)
@@ -116,7 +107,6 @@ class Model(Cached):
         else:
             lo, hi = min(z_range), max(z_range)
 
-        # the model redshift must land inside the grid whatever was requested
         lo = max(0., min(lo, self.z))
         hi = max(hi, self.z)
 
@@ -188,29 +178,11 @@ class Model(Cached):
             return self.k_damp_1h
         return damp_1h_k
 
+
     @staticmethod
     def _apply_1h_damping(p_1h, ks, k_star):
-        """Suppress the 1-halo shot-noise plateau below the halo scale.
+        """Suppress the 1-halo shot-noise plateau below the halo scale."""
 
-        Mass conservation forbids the plateau from persisting to k -> 0 in
-        P(k), so ``P_gal`` damps it by default.  The Gaussian form (HMcode,
-        Mead et al. 2015) is the gentlest choice: its compensation is
-        non-oscillatory and decays superexponentially in configuration space,
-        whereas e.g. (k/k*)^4/(1+(k/k*)^4) imprints a damped cosine of
-        wavelength 2*pi*sqrt(2)/k* on xi_1h out to ~100 Mpc.
-
-        No form is artifact-free in configuration space, though: forcing
-        P_1h(0) = 0 forces ∫ r^2 xi_1h dr = 0, so the damped xi_1h *must* go
-        negative — the Gaussian's compensation is a negative pedestal of
-        depth ~ P_1h(0) k*^3 / (8 pi^{3/2}) over r ≲ 2/k*, which lands right
-        at the 1-to-2-halo transition and pulls xi_gal below xi_2h there.
-        The undamped plateau, by contrast, is a pure zero-lag (delta at
-        r = 0) term that is invisible at any finite separation, so ``cf_3d``
-        and ``cf_ang`` default to no damping and are exact where damping is
-        approximate; ringing from the plateau is not a concern there because
-        the 1-halo term is transformed on its own extended k-grid (see
-        ``_pk_1h_extended``).
-        """
         if k_star is None:
             return p_1h
         return p_1h * -np.expm1(-(np.asarray(ks) / k_star)**2)
