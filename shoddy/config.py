@@ -53,9 +53,6 @@ class HaloConfig:
         self._build_sigma_interp(self.mass_grid, self._z_sigma_idx)
 
 
-
-
-
     def init_cosmo(self, pars, kmax, z_range=None,
                    z_pad = 3.,
                    z_step = 0.1):
@@ -85,8 +82,21 @@ class HaloConfig:
         cambpars.set_matter_power(redshifts=usezs, kmax=kmax, nonlinear=False)
 
         self.cosmo = camb.get_results(cambpars)
+        self.pkm_interp = self.cosmo.get_matter_power_interpolator(
+            nonlinear=False, hubble_units=False, k_hunit=False)
+
+
         self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
 
+
+    def Pk_m(self, ks, z=None):
+
+        if z is None:
+            z = self.z
+        # grid=False for array z: evaluate at (k_i, z_i) pairs, not all combos
+        grid = np.ndim(z) == 0
+        return self.pkm_interp.P(z, ks, grid=grid).ravel()
+    
     
     def _build_sigma_interp(self, mass_grid, z_sigma_idx=-1):
         ln_m = np.log(mass_grid)

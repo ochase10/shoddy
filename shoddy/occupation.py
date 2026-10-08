@@ -7,10 +7,7 @@ from numpy.typing import ArrayLike, NDArray
 
 
 class HOD(ABC):
-
-    def __init__(self):
-        self.pars = {}
-
+    pars: dict
 
     @abstractmethod
     def satellites(self, M_halo) -> NDArray[np.floating]:
@@ -25,10 +22,6 @@ class HOD(ABC):
     def N_hod(self, M_halo) -> NDArray[np.floating]:
         return self.centrals(M_halo) + self.satellites(M_halo)
     
-        
-    def update_pars(self, **new_pars):
-        self.pars.update(new_pars)
-    
 
     def avg_NcNs(self, M_halo):
         return self.centrals(M_halo) * self.satellites(M_halo)
@@ -36,6 +29,15 @@ class HOD(ABC):
 
     def avg_Ns2(self, M_halo):
         return self.satellites(M_halo)**2
+
+    
+    def update_pars(self, **new_pars):
+        self.pars.update(new_pars)
+
+
+    def with_pars(self, new_pars):
+        return type(self)(**{**self.pars, **new_pars})
+
 
 
 
@@ -47,10 +49,9 @@ class Zheng07(HOD):
                  M0,
                  M1,
                  alpha,
-                 dc=1.,
-                 **kwargs):
+                 dc=1.):
         
-        super().__init__(**kwargs)
+        super().__init__()
         
         self.pars = {'M_min': M_min,
                      'sig_logM': sig_logM, 

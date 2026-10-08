@@ -37,11 +37,18 @@ class Model():
                                  kmax=max(self.ks)*2)
 
         self.profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
+        self.u_grid = self.profile.u(self.ks, self.ms)
 
         self.hmf = lookup(mass_function.MODELS, hmf, "HMF")(self.config)
+        self.dndm = self.hmf.dndm(self.ms)
 
         if hod is not None:
-            self.hod = lookup(occupation.MODELS, hod, "HOD")
+            self.set_hod(hod, hod_pars)
+        else:
+            self._hod = None
+
+        sig_d2 = _trapz(self.Pk_m(self.ks), self.ks) / (6 * np.pi**2)
+        self.k_star = 0.584 / np.sqrt(sig_d2)
 
 
     @property
@@ -52,57 +59,14 @@ class Model():
     def ms(self):
         return self.config.mass_grid
 
-    def pkm_interp(self):
-        return self.config.cosmo.get_matter_power_interpolator(
-            nonlinear=False, hubble_units=False, k_hunit=False
-        )
+    @property
+    def hod(self):
+        if self._hod is None:
+            raise ValueError("HOD not defined")
+        return self._hod
 
-    def matter_power_spectrum(self, ks, z=None):
-        """
-        Linear matter power spectrum.
-
-        Parameters
-        ----------
-        ks : array-like
-            Wavenumbers [1/Mpc].
-        z : float or array-like, optional
-            Redshift(s).  Scalar (or None → self.z) evaluates at a single
-            redshift and returns a 1-D array.  A 1-D array is treated as
-            element-wise pairs ``(ks[i], z[i])``.
-        """
-        if z is None:
-            z = self.z
-        # grid=False for array z: evaluate at (k_i, z_i) pairs, not all combos
-        grid = np.ndim(z) == 0
-        return self.pkm_interp.P(z, ks, grid=grid).ravel()
-
-    def k_damp_1h(self):
-        """
-        Default 1-halo damping wavenumber k* [1/Mpc] at the model redshift.
-
-        HMcode value (Mead et al. 2015)
-        """
-        ks = np.geomspace(1e-4, 1e2, 512)
-        sig_d2 = _trapz(self.matter_power_spectrum(ks), ks) / (6 * np.pi**2)
-        return 0.584 / np.sqrt(sig_d2)
-
-    def _resolve_k_damp(self, damp_1h_k):
-        """Map the ``damp_1h_k`` argument to a wavenumber: 'auto' -> the
-        z-aware default, a float -> itself, None -> no damping."""
-        if isinstance(damp_1h_k, str):
-            if damp_1h_k != 'auto':
-                raise ValueError(f"damp_1h_k must be 'auto', a wavenumber, or None; got '{damp_1h_k}'")
-            return self.k_damp_1h
-        return damp_1h_k
-
-
-    @staticmethod
-    def _apply_1h_damping(p_1h, ks, k_star):
-        """Suppress the 1-halo shot-noise plateau below the halo scale."""
-
-        if k_star is None:
-            return p_1h
-        return p_1h * -np.expm1(-(np.asarray(ks) / k_star)**2)
+    def Pk_m(self, ks, z=None):
+        return self.config.Pk_m(ks, z)
 
 
     def set_hod(self, new_hod, pars=None):
@@ -110,148 +74,95 @@ class Model():
             pars = {}
         if not isinstance(pars, dict):
             raise TypeError("HOD parameters argument should be a dict")
-        self.hod = self._resolve_component(
-            new_hod, self._hod_registry, occupation.HOD, 'HOD', **pars
-        )
-        self._invalidate('_n_gal')
+        self._hod = lookup(occupation.MODELS, new_hod, "HOD")(**pars)
 
 
     def update_hod_pars(self, **new_pars):
-        """Update HOD parameters and invalidate the cached galaxy density."""
-        self.check_HOD_defined()
-        assert self.hod is not None
         self.hod.update_pars(**new_pars)
-        self._invalidate('_n_gal')
 
-    def with_hod(self, hod_pars):
-        """
-        Return a shallow copy of the model with updated HOD parameters, without
-        mutating self. All expensive objects (cosmology, HMF, profile arrays) are
-        shared by reference — only the HOD and its cached n_gal differ.
 
-        Intended for stateless likelihood evaluation in MCMC:
-
-            def log_prob(params):
-                m = model.with_hod({'M_min': params[0], 'sig_logM': params[1], ...})
-                return -0.5 * chi2(m.cf_ang(theta=theta_data)[0], data)
-
-        Parameters
-        ----------
-        hod_pars : dict
-            HOD parameters to override.  Keys must match the constructor
-            arguments of the current HOD class (e.g. Zheng07 expects
-            M_min, sig_logM, M0, M1, alpha).  Unspecified parameters
-            are inherited from the current HOD.
-        """
-        self.check_HOD_defined()
-        assert self.hod is not None
-        # Prime the power spectrum interpolator before copying so all copies
-        # share the same object rather than each recreating it.
-        _ = self.pkm_interp
+    def with_hod(self, hod_pars, new_hod=None):
         m = copy.copy(self)
-        m.hod = type(self.hod)(**{**self.hod.pars, **hod_pars})
-        # copy.copy shallow-copies __dict__, carrying over any cached n_gal from
-        # self; drop it so the new HOD's density is recomputed.  The shared HMF
-        # arrays and pk interpolator are intentionally kept by reference.
-        m._invalidate('_n_gal')
+
+        if new_hod is None:
+            m._hod = self.hod.with_pars(hod_pars)
+        else:
+            m.set_hod(new_hod, hod_pars)
+
         return m
 
 
-    def check_HOD_defined(self):
-        if self.hod is None:
-            raise Exception("HOD must be defined to get galaxy density")
-
-
-    @cached_quantity
-    def _n_gal(self):
-        # Galaxy density on the default grid; invalidated when the HOD changes
-        # (see set_hod / update_hod_pars / with_hod).
-        return float(self.hmf.halo_integral(self.ms, self.hod.N_hod(self.ms)))
-
-    def n_gal(self, Ms=None, recompute=False):
-        """Mean galaxy number density.  The default mass grid uses the cached
-        value; an explicit off-grid ``Ms`` is integrated fresh."""
-        self.check_HOD_defined()
-        assert self.hod is not None
-        
-        if Ms is None or np.array_equal(Ms, self.ms):
-            if recompute:
-                self._invalidate('_n_gal')
-            return self._n_gal
+    def n_gal(self, Ms=None):
+        if Ms is None:
+            Ms = self.ms
         return float(self.hmf.halo_integral(Ms, self.hod.N_hod(Ms)))
+
+
+    def galaxy_bias(self, Ms=None):
+        if Ms is None:
+            Ms = self.ms
+
+        ng = self.n_gal(Ms)
+        n_avg = self.hod.N_hod(Ms)
+        b_halo = self.hmf.bias(Ms)
+
+        return self.hmf.halo_integral(Ms, n_avg*b_halo) / ng
+
     
-
     def Pk_cs(self, Ms, u, ng):
-        self.check_HOD_defined()
-        assert self.hod is not None
-
         igrand = self.hod.avg_NcNs(Ms)[None, :] * u
         res = self.hmf.halo_integral(Ms, igrand, axis=1)
         return 2.0 * res / ng**2
 
+
     def Pk_ss(self, Ms, u, ng):
-        self.check_HOD_defined()
-        assert self.hod is not None
 
         igrand = self.hod.avg_Ns2(Ms)[None, :] * u**2
         res = self.hmf.halo_integral(Ms, igrand, axis=1)
         return res / ng**2
 
-    def Pk_1h(self, ks=None, Ms=None):
-        self.check_HOD_defined()
-        assert self.hod is not None
 
-        if Ms is None:
-            Ms = self.ms
-        if ks is None:
-            ks = self.ks
+    def Pk_1h(self, ks=None, Ms=None, damp=None):
 
+        if Ms is None and ks is None:
+            u = self.u_grid
+        else:
+            Ms = self.ms if Ms is None else Ms
+            ks = self.ks if ks is None else ks
+            u = self.profile.u(ks, Ms)
+            
         ng = self.n_gal(Ms)
-        u = self.prof.k_profile(ks, Ms)
 
-        return self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
+        p_1h = self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
+
+        if damp is None or damp is False:
+            return p_1h
+        elif type(damp) is float:
+            return p_1h * -np.expm1(-(np.asarray(ks) / damp)**2)
+        
+        return p_1h * -np.expm1(-(np.asarray(ks) / self.k_star)**2)
 
     def Pk_2h(self, ks=None, z=None, Ms=None):
-        self.check_HOD_defined()
-        assert self.hod is not None
-
-        if Ms is None:
-            Ms = self.ms
-        if ks is None:
-            ks = self.ks
+        if Ms is None and ks is None:
+            u = self.u_grid
+        else:
+            Ms = self.ms if Ms is None else Ms
+            ks = self.ks if ks is None else ks
+            u = self.profile.u(ks, Ms)
 
         ng = self.n_gal(Ms)
-        u = self.prof.k_profile(ks, Ms)
+        
         igrand = self.hod.N_hod(Ms)[None, :] * self.hmf.bias(Ms)[None, :] * u
         res = (self.hmf.halo_integral(Ms, igrand, axis=1) / ng) ** 2
 
-        # matter_power_spectrum handles scalar and array z uniformly (grid=False for arrays)
-        return self.matter_power_spectrum(ks, z) * res
+        return self.Pk_m(ks, z) * res
 
 
-    def P_gal(self, ks=None, z=None, Ms=None, damp_1h_k='auto'):
-        """
-        Total galaxy power spectrum, 1-halo + 2-halo.
+    def P_gal(self, ks=None, z=None, Ms=None, damp_1h=None):
+        Ms = self.ms if Ms is None else Ms
+        ks = self.ks if ks is None else ks
 
-        ``damp_1h_k`` controls the low-k suppression of the 1-halo plateau
-        (see ``_apply_1h_damping``): 'auto' (default) uses the z-aware scale
-        ``k_damp_1h``, a float sets k* directly, None disables it.
-        """
-        self.check_HOD_defined()
-        assert self.hod is not None
-
-        if Ms is None:
-            Ms = self.ms
-        if ks is None:
-            ks = self.ks
-        else:
-            ks = np.asarray(ks)
-
-        p_1h = self._apply_1h_damping(
-            self.Pk_1h(ks=ks, Ms=Ms), ks, self._resolve_k_damp(damp_1h_k)
-        )
-
-        return p_1h + self.Pk_2h(ks=ks, Ms=Ms, z=z)
+        return self.Pk_1h(ks=ks, Ms=Ms, damp=damp_1h) + self.Pk_2h(ks=ks, Ms=Ms, z=z)
 
 
     def limber_cl(self, power_func, z_arr=None, nz=None, ls=None):
@@ -300,7 +211,7 @@ class Model():
 
         Matter power spectrum (positional args already match)::
 
-            model.limber_cl(model.matter_power_spectrum)
+            model.limber_cl(model.Pk_m)
         """
         
         if nz is not None and z_arr is None and not callable(nz):
@@ -314,7 +225,7 @@ class Model():
         if len(z_arr) < 2:
             raise ValueError("z_arr must contain at least 2 positive redshift samples")
 
-        pk_zmin, pk_zmax = self.pkm_interp.zmin, self.pkm_interp.zmax
+        pk_zmin, pk_zmax = self.config.pkm_interp.zmin, self.config.pkm_interp.zmax
         if z_arr.min() < pk_zmin or z_arr.max() > pk_zmax:
             warnings.warn(
                 f"z_arr spans [{z_arr.min():.2f}, {z_arr.max():.2f}] but the matter "
@@ -407,7 +318,6 @@ class Model():
                 raise ValueError("Power spectrum array length must match k array")
             r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(power, extrap=True)
         else:
-            self.check_HOD_defined()
             r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(
                 self.Pk_2h(ks=ks, Ms=Ms), extrap=True
             )
@@ -485,7 +395,7 @@ class Model():
             log_k = np.log(np.clip(ks, ks_min, ks_max))
             p1h = np.exp(np.interp(log_k, log_ks_full, log_p1h))
             F   = np.exp(np.interp(log_k, log_ks_full, log_F))
-            result = p1h + F**2 * self.matter_power_spectrum(ks, z)
+            result = p1h + F**2 * self.Pk_m(ks, z)
             return np.maximum(0.0, result)   # guard against Pmm rounding below 0 at extremes
 
         return _power
@@ -524,16 +434,5 @@ class Model():
 
         return wtheta, theta_out
     
-    def galaxy_bias(self, Ms=None):
-        self.check_HOD_defined()
-        assert self.hod is not None
-
-        if Ms is None:
-            Ms = self.ms
-
-        ng = self.n_gal(Ms)
-        n_avg = self.hod.N_hod(Ms)
-        b_halo = self.hmf.bias(Ms)
-
-        return self.hmf.halo_integral(Ms, n_avg*b_halo) / ng
+    
         

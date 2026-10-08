@@ -15,9 +15,6 @@ class HaloProfile(ABC):
     def u(self, ks, M) -> NDArray[np.floating]:
         pass
 
-    def conc(self, M, cnorm=7.85, alpha=0.71, beta=-0.081, m0=2e12):
-        return cnorm/(1+self.config.z)**(alpha) * (M / m0)**(beta)
-
     def Ac(self, c):
         return np.log(1+c) - c/(1+c)
 
@@ -49,6 +46,9 @@ class NFW(HaloProfile):
         # u(k→0) = 1 analytically; sici terms diverge and cancel at k=0 producing NaN
         result[~np.isfinite(result)] = 1.0
         return result
+
+    def conc(self, M, cnorm=7.85, alpha=0.71, beta=-0.081, m0=2e12):
+            return cnorm/(1+self.config.z)**(alpha) * (M / m0)**(beta)
 
 
 MODELS = {'nfw': NFW}
