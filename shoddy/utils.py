@@ -10,6 +10,12 @@ LN10 = np.log(10)
 
 _trapz = getattr(np, 'trapezoid', np.trapz)
 
+def lookup(reg_dict, name, label):
+    try:
+        return reg_dict[name.lower()]
+    except KeyError:
+        raise ValueError(f"Unknown {label} '{name}'. Options: {list(reg_dict)}") from None
+
 
 def a2z(a: float) -> float:
     if a <= 0 or a > 1:

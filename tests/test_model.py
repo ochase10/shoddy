@@ -11,7 +11,7 @@ import pytest
 
 from shoddy import Model
 from shoddy.mass_function import Tinker
-from shoddy.hod import Zheng07
+from shoddy.occupation import Zheng07
 
 
 # --- Construction & validation -------------------------------------------------
@@ -46,24 +46,24 @@ def test_n_gal_requires_hod(model):
 
 
 def test_set_hmf_by_string(model):
-    model.set_hmf("tinker", model.halo_data)
+    model.set_hmf("tinker", model.config)
     assert isinstance(model.HMF, Tinker)
 
 
 def test_set_hmf_by_instance(model):
-    inst = Tinker(model.halo_data)
-    model.set_hmf(inst, model.halo_data)
+    inst = Tinker(model.config)
+    model.set_hmf(inst, model.config)
     assert model.HMF is inst
 
 
 def test_unknown_hmf_raises_valueerror(model):
     with pytest.raises(ValueError, match="Unknown HMF"):
-        model.set_hmf("does-not-exist", model.halo_data)
+        model.set_hmf("does-not-exist", model.config)
 
 
 def test_unknown_profile_raises_valueerror(model):
     with pytest.raises(ValueError, match="Unknown halo profile"):
-        model.set_halo_profile("does-not-exist", model.halo_data)
+        model.set_halo_profile("does-not-exist", model.config)
 
 
 def test_unknown_hod_raises_valueerror(model):
@@ -73,7 +73,7 @@ def test_unknown_hod_raises_valueerror(model):
 
 def test_wrong_component_type_raises_typeerror(model):
     with pytest.raises(TypeError):
-        model.set_hmf(12345, model.halo_data)
+        model.set_hmf(12345, model.config)
 
 
 def test_hod_pars_must_be_dict(model):

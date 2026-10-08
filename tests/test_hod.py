@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from shoddy import HOD
-from shoddy.hod import Zheng07
+from shoddy.occupation import Zheng07
 
 
 @pytest.fixture

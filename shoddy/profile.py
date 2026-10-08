@@ -10,28 +10,9 @@ class HaloProfile(ABC):
 
     def __init__(self, config):
         self.config = config
-        self._u_cache = None
-        self._cache_ks = None
-        self._cache_M = None
-
-    def k_profile(self, ks, M, recompute=False) -> NDArray[np.floating]:
-        ks = np.asarray(ks)
-        M = np.asarray(M)
-        if (not recompute
-                and self._u_cache is not None
-                and self._cache_ks is not None
-                and self._cache_M is not None
-                and np.array_equal(ks, self._cache_ks)
-                and np.array_equal(M, self._cache_M)):
-            return self._u_cache
-        result = self._compute_profile(ks, M)
-        self._u_cache = result
-        self._cache_ks = ks
-        self._cache_M = M
-        return result
 
     @abstractmethod
-    def _compute_profile(self, ks, M) -> NDArray[np.floating]:
+    def u(self, ks, M) -> NDArray[np.floating]:
         pass
 
     def conc(self, M, cnorm=7.85, alpha=0.71, beta=-0.081, m0=2e12):
@@ -43,7 +24,7 @@ class HaloProfile(ABC):
 
 class NFW(HaloProfile):
 
-    def _compute_profile(self, ks, M):
+    def u(self, ks, M):
         if not isinstance(M, np.ndarray):
             M = np.array(M)
 
@@ -68,3 +49,6 @@ class NFW(HaloProfile):
         # u(k→0) = 1 analytically; sici terms diverge and cancel at k=0 producing NaN
         result[~np.isfinite(result)] = 1.0
         return result
+
+
+MODELS = {'nfw': NFW}

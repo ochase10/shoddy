@@ -34,7 +34,7 @@ def test_nu_increases_with_mass(model):
 
 
 def test_sigma_decreases_with_mass(model):
-    sig = model.halo_data.sigma_m(model.ms)
+    sig = model.config.sigma_m(model.ms)
     assert np.all(np.diff(sig) < 0)
 
 
@@ -62,11 +62,11 @@ def test_halo_integral_shape_mismatch_raises(model):
 def test_behroozi_applies_correction_to_tinker(model):
     # Behroozi13 is a small multiplicative correction on Tinker; at z=0 the
     # correction is tiny (~1e-6) but nonzero, so the arrays must not be identical.
-    behroozi = Behroozi13(model.halo_data).hmf(model.ms)
-    tinker = Tinker(model.halo_data).hmf(model.ms)
+    behroozi = Behroozi13(model.config).hmf(model.ms)
+    tinker = Tinker(model.config).hmf(model.ms)
     assert not np.array_equal(behroozi, tinker)
     assert np.all(behroozi > 0)
 
 
 def test_tinker_is_mass_function(model):
-    assert isinstance(Tinker(model.halo_data), MassFunction)
+    assert isinstance(Tinker(model.config), MassFunction)

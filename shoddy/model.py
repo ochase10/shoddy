@@ -2,43 +2,16 @@
 import copy
 import warnings
 
-import camb
 import numpy as np
 from scipy.interpolate import make_interp_spline
 from scipy.stats import norm
 from mcfit import P2xi, Hankel
 
-from . import mass_function, profile, hod
-from .utils import G, C, _trapz
-from .halo_config import HaloConfig
-from .caching import Cached, cached_quantity
+from . import mass_function, occupation, profile
+from .utils import C, _trapz, lookup
+from .config import HaloConfig
 
-
-class Model(Cached):
-
-    # Strings to reference specific models
-    _hmf_registry = {'tinker': mass_function.Tinker,
-                     'behroozi': mass_function.Behroozi13}
-    _profile_registry = {'nfw': profile.NFW}
-    _hod_registry = {'zheng07': hod.Zheng07}
-
-    _default_cosmo_pars = {
-        'H0': 70.,
-        'omch2': 0.25 * 0.7**2,
-        'ombh2': 0.05 * 0.7**2,
-        'omk': 0.0,
-        'As': 2e-9,
-        'ns': 0.96,
-        'mnu': 0.0,
-        'lmax': 2000,
-        'WantTransfer': True,
-        'WantCls': False
-    }
-
-    # CAMB caps z grid length at 256
-    _Z_PAD = 3.
-    _Z_STEP = 0.1
-    _Z_MAX_PTS = 256
+class Model():
 
     def __init__(
             self,
@@ -47,87 +20,40 @@ class Model(Cached):
             hmf='behroozi',
             halo_prof='nfw',
             hod=None,
-            hod_pars={},
+            hod_pars=None,
             halo_mass_grid=None,
             k_grid=None,
-            z_range=None,
-            **kwargs
-    ):
-        
-        self.z = z
-
-        if halo_mass_grid is not None:
-            if len(halo_mass_grid) > 2:
-                self.ms = np.asarray(halo_mass_grid).copy()
-            else:
-                raise ValueError("Halo mass grid must contain more than 2 values")
-        else:
-            self.ms = np.logspace(9, 16, 256)
-
-        self.log_ms = np.log10(self.ms)
+            z_range=None):
 
         if k_grid is not None:
             self.ks = np.asarray(k_grid).copy()
         else:
             self.ks = np.logspace(np.log10(1e-4), np.log10(1e2), 1001)
 
-        #### Set up cosmology ###
-        self.cosmo_pars = self._default_cosmo_pars.copy()
-        if cosmo_pars is not None:
-            self.cosmo_pars.update(cosmo_pars)
+        self.config = HaloConfig(z,
+                                 cosmo_pars,
+                                 mass_grid=halo_mass_grid,
+                                 z_range=z_range,
+                                 kmax=max(self.ks)*2)
 
-        self.rhocrit0 = (3*self.cosmo_pars['H0']**2/(8*np.pi*G)) # Msun / Mpc^3
-    
-        self.init_cosmo(self.cosmo_pars, z_range=z_range)
-        ###
+        self.profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
 
-        self.halo_data = HaloConfig(self.cosmo, z, mass_grid=self.ms, z_sigma_idx=self._z_sigma_idx, **kwargs)
-
-        self.set_hmf(hmf, self.halo_data)
-        self.set_halo_profile(halo_prof, self.halo_data)
-        # Warm the NFW profile cache on self.ks so the first cf_ang/Pk call
-        # doesn't pay the sici computation cost.
-        self.prof.k_profile(self.ks, self.ms)
+        self.hmf = lookup(mass_function.MODELS, hmf, "HMF")(self.config)
 
         if hod is not None:
-            self.set_hod(hod, hod_pars)
-        else:
-            self.hod = None
+            self.hod = lookup(occupation.MODELS, hod, "HOD")
 
 
-    def init_cosmo(self, pars, z_range=None):
-        """
-        Run CAMB and cache the results.
-        """
+    @property
+    def z(self):
+        return self.config.z
 
-        cambpars = camb.set_params(**pars)
+    @property
+    def ms(self):
+        return self.config.mass_grid
 
-        if z_range is None:
-            lo, hi = self.z - self._Z_PAD, self.z + self._Z_PAD
-        else:
-            lo, hi = min(z_range), max(z_range)
-
-        lo = max(0., min(lo, self.z))
-        hi = max(hi, self.z)
-
-        # point count rather than fixed spacing, so a very wide request degrades
-        # to a coarser grid instead of tripping CAMB's 256-redshift cap
-        npts = int(np.clip(round((hi - lo) / self._Z_STEP) + 1, 2, self._Z_MAX_PTS - 1))
-        usezs = np.linspace(lo, hi, npts)
-        if not np.any(np.isclose(usezs, self.z)):
-            usezs = np.append(usezs, self.z)
-        usezs = np.sort(usezs)[::-1]
-
-        cambpars.set_matter_power(redshifts=usezs, kmax=max(self.ks)*2, nonlinear=False)
-
-        self.cosmo = camb.get_results(cambpars)
-        self._invalidate('pkm_interp', 'k_damp_1h')
-        self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
-
-
-    @cached_quantity
     def pkm_interp(self):
-        return self.cosmo.get_matter_power_interpolator(
+        return self.config.cosmo.get_matter_power_interpolator(
             nonlinear=False, hubble_units=False, k_hunit=False
         )
 
@@ -142,9 +68,7 @@ class Model(Cached):
         z : float or array-like, optional
             Redshift(s).  Scalar (or None → self.z) evaluates at a single
             redshift and returns a 1-D array.  A 1-D array is treated as
-            element-wise pairs ``(ks[i], z[i])`` and also returns 1-D —
-            this avoids the Cartesian-product overhead of CAMB's default
-            grid evaluation and is the path used by ``limber_cl``.
+            element-wise pairs ``(ks[i], z[i])``.
         """
         if z is None:
             z = self.z
@@ -152,18 +76,11 @@ class Model(Cached):
         grid = np.ndim(z) == 0
         return self.pkm_interp.P(z, ks, grid=grid).ravel()
 
-
-    @cached_quantity
     def k_damp_1h(self):
         """
         Default 1-halo damping wavenumber k* [1/Mpc] at the model redshift.
 
-        k* = 0.584/sigma_d, where sigma_d is the rms linear (Zel'dovich)
-        displacement, sigma_d^2 = (1/6 pi^2) ∫ P_lin(k) dk.  The coefficient is
-        the HMcode value (Mead et al. 2015); the damping it feeds (see
-        ``_apply_1h_damping``) suppresses the unphysical 1-halo plateau below
-        the halo scale.  sigma_d shrinks with z, so k* grows and the damping
-        tracks the nonlinear scale instead of sitting at a fixed comoving k.
+        HMcode value (Mead et al. 2015)
         """
         ks = np.geomspace(1e-4, 1e2, 512)
         sig_d2 = _trapz(self.matter_power_spectrum(ks), ks) / (6 * np.pi**2)
@@ -188,48 +105,13 @@ class Model(Cached):
         return p_1h * -np.expm1(-(np.asarray(ks) / k_star)**2)
 
 
-    @staticmethod
-    def _resolve_component(spec, registry, base, label, *args, **kwargs):
-        """Turn a name or instance into a component object.
-
-        A string is looked up (case-insensitively) in ``registry`` and the
-        matching class is instantiated with ``*args, **kwargs``; an existing
-        instance of ``base`` is returned unchanged.
-        """
-        if isinstance(spec, str):
-            try:
-                cls = registry[spec.lower()]
-            except KeyError:
-                raise ValueError(
-                    f"Unknown {label} '{spec}'. Options: {sorted(registry)}"
-                ) from None
-            return cls(*args, **kwargs)
-        if isinstance(spec, base):
-            return spec
-        raise TypeError(
-            f"{label} must be a str or {base.__name__} instance, got {type(spec).__name__}"
-        )
-
-
-    def set_hmf(self, new_hmf, config, **kwargs):
-        self.HMF = self._resolve_component(
-            new_hmf, self._hmf_registry, mass_function.MassFunction, 'HMF', config, **kwargs
-        )
-        # The HMF feeds every halo-grid quantity and the galaxy density.
-        self._invalidate('_n_gal')
-
-
-    def set_halo_profile(self, new_prof, config, **kwargs):
-        self.prof = self._resolve_component(
-            new_prof, self._profile_registry, profile.HaloProfile, 'halo profile', config, **kwargs
-        )
-
-
-    def set_hod(self, new_hod, pars={}):
+    def set_hod(self, new_hod, pars=None):
+        if pars is None:
+            pars = {}
         if not isinstance(pars, dict):
             raise TypeError("HOD parameters argument should be a dict")
         self.hod = self._resolve_component(
-            new_hod, self._hod_registry, hod.HOD, 'HOD', **pars
+            new_hod, self._hod_registry, occupation.HOD, 'HOD', **pars
         )
         self._invalidate('_n_gal')
 
@@ -284,7 +166,7 @@ class Model(Cached):
     def _n_gal(self):
         # Galaxy density on the default grid; invalidated when the HOD changes
         # (see set_hod / update_hod_pars / with_hod).
-        return float(self.HMF.halo_integral(self.ms, self.hod.N_hod(self.ms)))
+        return float(self.hmf.halo_integral(self.ms, self.hod.N_hod(self.ms)))
 
     def n_gal(self, Ms=None, recompute=False):
         """Mean galaxy number density.  The default mass grid uses the cached
@@ -296,7 +178,7 @@ class Model(Cached):
             if recompute:
                 self._invalidate('_n_gal')
             return self._n_gal
-        return float(self.HMF.halo_integral(Ms, self.hod.N_hod(Ms)))
+        return float(self.hmf.halo_integral(Ms, self.hod.N_hod(Ms)))
     
 
     def Pk_cs(self, Ms, u, ng):
@@ -304,7 +186,7 @@ class Model(Cached):
         assert self.hod is not None
 
         igrand = self.hod.avg_NcNs(Ms)[None, :] * u
-        res = self.HMF.halo_integral(Ms, igrand, axis=1)
+        res = self.hmf.halo_integral(Ms, igrand, axis=1)
         return 2.0 * res / ng**2
 
     def Pk_ss(self, Ms, u, ng):
@@ -312,7 +194,7 @@ class Model(Cached):
         assert self.hod is not None
 
         igrand = self.hod.avg_Ns2(Ms)[None, :] * u**2
-        res = self.HMF.halo_integral(Ms, igrand, axis=1)
+        res = self.hmf.halo_integral(Ms, igrand, axis=1)
         return res / ng**2
 
     def Pk_1h(self, ks=None, Ms=None):
@@ -340,8 +222,8 @@ class Model(Cached):
 
         ng = self.n_gal(Ms)
         u = self.prof.k_profile(ks, Ms)
-        igrand = self.hod.N_hod(Ms)[None, :] * self.HMF.bias(Ms)[None, :] * u
-        res = (self.HMF.halo_integral(Ms, igrand, axis=1) / ng) ** 2
+        igrand = self.hod.N_hod(Ms)[None, :] * self.hmf.bias(Ms)[None, :] * u
+        res = (self.hmf.halo_integral(Ms, igrand, axis=1) / ng) ** 2
 
         # matter_power_spectrum handles scalar and array z uniformly (grid=False for arrays)
         return self.matter_power_spectrum(ks, z) * res
@@ -390,7 +272,7 @@ class Model(Cached):
         nz : array-like or callable, optional
             Redshift distribution n(z).  A callable is evaluated on
             ``z_arr`` and normalised; an array is used directly (must align
-            with ``z_arr``); ``None`` gives a top-hat over ``z_arr``.
+            with ``z_arr``); Default is Gaussian with width 0.25.
         ls : array-like, optional
             Multipoles at which to evaluate C_l.  Defaults to 1001
             log-spaced points from 1 to 10^6.
@@ -420,16 +302,12 @@ class Model(Cached):
 
             model.limber_cl(model.matter_power_spectrum)
         """
-
-        if power_func is None:
-            self.check_HOD_defined()
-            power_func = lambda ks, z: self.P_gal(ks=ks, z=z, Ms=self.ms)
         
         if nz is not None and z_arr is None and not callable(nz):
             raise ValueError("z_arr must be provided when nz is an array")
 
         if z_arr is None:
-            z_arr = np.linspace(self.halo_data.z - 0.5, self.halo_data.z + 0.5, 51)
+            z_arr = np.linspace(self.z - 0.5, self.z + 0.5, 51)
         z_arr = np.asarray(z_arr)
         mask = z_arr > 0
         z_arr = z_arr[mask]
@@ -455,8 +333,8 @@ class Model(Cached):
         
         nz /= _trapz(nz, z_arr)
         
-        h_z = self.halo_data.cosmo.hubble_parameter(z_arr)
-        chi_z = self.halo_data.cosmo.comoving_radial_distance(z_arr)
+        h_z = self.config.cosmo.hubble_parameter(z_arr)
+        chi_z = self.config.cosmo.comoving_radial_distance(z_arr)
 
         if ls is None:
             ls = np.logspace(0, 6, 1001)
@@ -566,8 +444,8 @@ class Model(Cached):
         p1h_grid = self.Pk_1h()                         # (n_k,) on self.ks via dot products
         u_grid   = self.prof.k_profile(self.ks, self.ms)  # (n_k, n_M) — cache hit
         N_hod    = self.hod.N_hod(self.ms)              # (n_M,)
-        bias     = self.HMF.bias(self.ms)                  # (n_M,) — cached on the HMF
-        weights  = self.HMF.integration_weights(self.ms)   # (n_M,) — cached on the HMF
+        bias     = self.hmf.bias(self.ms)                  # (n_M,) — cached on the HMF
+        weights  = self.hmf.integration_weights(self.ms)   # (n_M,) — cached on the HMF
         F_grid   = (N_hod * bias * u_grid @ weights) / ng  # (n_k,)
 
         # Extend precomputed grid into high-k regime where u(k,M) → 0, at
@@ -655,7 +533,7 @@ class Model(Cached):
 
         ng = self.n_gal(Ms)
         n_avg = self.hod.N_hod(Ms)
-        b_halo = self.HMF.bias(Ms)
+        b_halo = self.hmf.bias(Ms)
 
-        return self.HMF.halo_integral(Ms, n_avg*b_halo) / ng
+        return self.hmf.halo_integral(Ms, n_avg*b_halo) / ng
         
