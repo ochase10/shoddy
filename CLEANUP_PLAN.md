@@ -29,10 +29,10 @@ Items marked **Decide** need a design choice before implementation.
 ## Phase 2 — Unify caching
 
 - [x] **Decide:** one caching mechanism for the package. Likely `caching.py` (`Cached` / `cached_quantity`), with grid-dependent values cached only on the default grid
-- [ ] Port `MassFunction._on_grid` caches (`hmf`, `bias`, `integration_weights`) to it
-- [ ] Port `HaloProfile` single-slot cache to it; design so Model no longer calls `prof._compute_profile` directly
+- [x] Port `MassFunction._on_grid` caches (`hmf`, `bias`, `integration_weights`) to it
+- [x] Port `HaloProfile` single-slot cache to it; design so Model no longer calls `prof._compute_profile` directly
 - [x] Remove `recompute=` flags (`n_gal`, `k_profile`) if invalidation makes them redundant
-- [ ] Update `test_caching.py` / `test_profile.py` accordingly
+- [x] Update `test_caching.py` / `test_profile.py` accordingly
 
 ## Phase 3 — Component wiring
 
@@ -45,7 +45,7 @@ Items marked **Decide** need a design choice before implementation.
 
 - [x] **Decide:** how to handle repeated `check_HOD_defined(); assert hod is not None` and `Ms`/`ks` defaulting — helper method, property that raises, or decorator
 - [ ] One 1-halo implementation (`Pk_cs` + `Pk_ss`) reused by `Pk_1h`, `_pk_1h_extended`, `_build_fast_power_func`
-- [ ] One high-k grid extension helper (pick one point-density rule)
+- [x] One high-k grid extension helper (pick one point-density rule)
 - [ ] Build `P2xi` once per call in `cf_3d`
 
 ## Phase 5 — Split model.py

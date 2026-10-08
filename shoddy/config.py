@@ -84,6 +84,7 @@ class HaloConfig:
         self.cosmo = camb.get_results(cambpars)
         self.pkm_interp = self.cosmo.get_matter_power_interpolator(
             nonlinear=False, hubble_units=False, k_hunit=False)
+        self.pk_zmin, self.pk_zmax = self.pkm_interp.zmin, self.pkm_interp.zmax
 
 
         self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
@@ -93,6 +94,10 @@ class HaloConfig:
 
         if z is None:
             z = self.z
+
+        elif np.min(z) < self.pk_zmin or np.max(z) > self.pk_zmax:
+            raise ValueError("Some or all z values fall outside the computed grid.")
+
         # grid=False for array z: evaluate at (k_i, z_i) pairs, not all combos
         grid = np.ndim(z) == 0
         return self.pkm_interp.P(z, ks, grid=grid).ravel()

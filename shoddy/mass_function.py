@@ -31,20 +31,25 @@ class MassFunction(ABC):
     def __init__(self, config):
         self.config = config
 
+
     @abstractmethod
     def dndm(self, M_halo) -> NDArray:
         """Halo mass function dn/dM."""
+
 
     @abstractmethod
     def bias(self, M_halo) -> NDArray:
         """Halo bias."""
 
+
     def nu(self, M):
         return self.config.crit / self.config.sigma_m(M)
+
 
     def integration_weights(self, M_halo):
         """Weights w_i such that ``quant @ w == integral(hmf * quant dM)``."""
         return self.dndm(M_halo) * log_trapz_weights(np.asarray(M_halo))
+
 
     def halo_integral(self, M_halo, quant, axis=0):
         if len(M_halo) != quant.shape[axis]:
@@ -64,8 +69,10 @@ class Tinker(MassFunction):
         dlnsig_dM = self.config.dlnsig_dlnm(M_halo) / M_halo
         return self.fsig(sig_m) * self.config.rho_m * (-dlnsig_dM) / M_halo
 
+
     def fsig(self, sig, A=0.186, a=1.47, b=2.57, c=1.19):
         return A * ((sig/b)**(-a) + 1) * np.exp(-c / sig**2)
+
 
     def bias(self, M_halo):
         v = self.nu(M_halo)
