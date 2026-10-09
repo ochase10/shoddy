@@ -5,6 +5,8 @@ from . import mass_function, occupation, profile
 import camb
 from scipy.interpolate import make_interp_spline
 
+_INTERP_K_MAX = 2e2
+_EXTRAP_K_MAX = 1e5
 
 class HaloConfig:
 
@@ -83,7 +85,7 @@ class HaloConfig:
 
         self.cosmo = camb.get_results(cambpars)
         self.pkm_interp = self.cosmo.get_matter_power_interpolator(
-            nonlinear=False, hubble_units=False, k_hunit=False)
+            nonlinear=False, hubble_units=False, k_hunit=False, extrap_kmax=_EXTRAP_K_MAX)
         self.pk_zmin, self.pk_zmax = self.pkm_interp.zmin, self.pkm_interp.zmax
 
 

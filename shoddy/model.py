@@ -1,5 +1,5 @@
 
-import copy
+import copy, warnings
 from numbers import Real
 
 import numpy as np
@@ -9,7 +9,7 @@ from mcfit import P2xi, Hankel
 
 from . import mass_function, occupation, profile
 from .utils import C, _trapz, lookup
-from .config import HaloConfig
+from .config import HaloConfig, _EXTRAP_K_MAX, _INTERP_K_MAX
 
 
 
@@ -39,18 +39,10 @@ def _resolve_nz(z, z_arr, nz):
     return z_arr, nz_norm
 
 
-def _extend_k_grid(ks, k_max=1e5):
-
-    dlnk = np.diff(np.log(ks))
-    if not np.allclose(dlnk, dlnk[0]):
-        raise ValueError("k grid must be evenly spaced in log")
-    if dlnk[0] <= 0:
-        raise ValueError("k grid must be strictly increasing")
-
-    if ks[-1] < k_max / 10:
-        k_ext = np.arange(np.log(ks[-1]), np.log(k_max), dlnk[0])
-        return np.exp(k_ext[1:])
-    return np.array([])
+def _check_k_grid(ks, warn_k=1e4):
+    if np.max(ks) < warn_k:
+        warnings.warn("k grid may not extend high enough to allow for accurate \
+                       correlation function computations.")
 
 
 class Model():
@@ -65,18 +57,21 @@ class Model():
             hod_pars=None,
             halo_mass_grid=None,
             k_grid=None,
-            z_range=None):
+            z_range=None,
+            camb_kmax=_INTERP_K_MAX):
 
         if k_grid is not None:
             self.ks = np.asarray(k_grid).copy()
+            _check_k_grid(self.ks)
+
         else:
-            self.ks = np.logspace(np.log10(1e-4), np.log10(1e2), 1001)
+            self.ks = np.logspace(np.log10(1e-4), np.log10(_EXTRAP_K_MAX), 1501)
 
         self.config = HaloConfig(z,
                                  cosmo_pars,
                                  mass_grid=halo_mass_grid,
                                  z_range=z_range,
-                                 kmax=max(self.ks)*2)
+                                 kmax=camb_kmax)
 
         self.profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
         self.u_grid = self.profile.u(self.ks, self.ms)
@@ -168,6 +163,7 @@ class Model():
         use_cache = ks is None and Ms is None
         Ms = self.ms if Ms is None else Ms
         ks = self.ks if ks is None else ks
+
         u = self.u_grid if use_cache else self.profile.u(ks, Ms)
 
         return ks, Ms, u
@@ -190,15 +186,19 @@ class Model():
         return p_1h * -np.expm1(-(np.asarray(ks) / damp)**2)
 
 
-    def Pk_2h(self, ks=None, z=None, Ms=None):
+    def F_k(self, ks=None, Ms=None):
         ks, Ms, u = self._k_m_profile(ks, Ms)
-
-        ng = self.n_gal(Ms)
         
+        ng = self.n_gal(Ms)
         igrand = self.hod.N_hod(Ms)[None, :] * self.hmf.bias(Ms)[None, :] * u
-        res = (self.hmf.halo_integral(Ms, igrand, axis=1) / ng) ** 2
+        
+        return self.hmf.halo_integral(Ms, igrand, axis=1) / ng
 
-        return self.Pk_m(ks, z) * res
+
+    def Pk_2h(self, ks=None, z=None, Ms=None):
+        Fk = self.F_k(ks, Ms)
+        ks = self.ks if ks is None else ks
+        return self.Pk_m(ks, z) * Fk**2
 
 
     def P_gal(self, ks=None, z=None, Ms=None, damp_1h=None):
@@ -232,16 +232,14 @@ class Model():
         """
         3-D galaxy correlation function via FFTLog.
         """
- 
-        kgrid = self.ks if ks is None else ks
-        kext = _extend_k_grid(kgrid)
-        all_ks = np.concatenate((kgrid, kext))
+        if ks is not None:
+            _check_k_grid(ks)
 
-        p1h = np.concatenate((self.Pk_1h(ks=ks, Ms=Ms, damp=damp_1h), 
-                              self.Pk_1h(ks=kext, Ms=Ms, damp=damp_1h)))
-        p2h = np.concatenate((self.Pk_2h(ks=ks, Ms=Ms), np.zeros_like(kext)))
+        p_gal = self.P_gal(ks, Ms=Ms, damp_1h=damp_1h)
+
+        ks = self.ks if ks is None else ks
         
-        r, xi = P2xi(all_ks, l=0, q=1.5, lowring=True)(p1h+p2h, extrap=True)
+        r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(p_gal, extrap=True)
 
         if rs is not None:
             xi = make_interp_spline(np.log(r), xi)(np.log(rs))
@@ -253,14 +251,10 @@ class Model():
     def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h=None):
         """
         Angular galaxy correlation function w(theta) via Limber + Hankel.
-
         """
-        if power_func is None:
 
-            if Ms is None:
-                power_func = self._build_fast_power_func(k_star)
-            else:
-                power_func = lambda ks, z: self.P_gal(ks=ks, z=z, Ms=Ms, damp_1h=damp_1h)
+        if power_func is None:
+            power_func = lambda ks, zs: self.P_gal_2d(ks=ks, zs=zs, Ms=Ms, damp_1h=damp_1h)
 
         cl, ls = self.limber_cl(power_func, z_arr=z_arr, nz=nz, ls=ls)
 
@@ -275,71 +269,25 @@ class Model():
         return wtheta, theta_out
 
 
-    def _build_fast_power_func(self, k_star):
-        """
-        Return a fast Limber power function by exploiting that P_gal(k, z) splits as
+    def P_gal_2d(self, ks, zs, Ms=None, damp_1h=None):
 
-            P_1h(k)  +  F(k)^2 * Pmm(k, z)
+        p1h_grid = self.Pk_1h(ks=None, Ms=Ms, damp=damp_1h)
+        Fk_grid = self.F_k(ks=None, Ms=Ms)
 
-        where P_1h and F are z-independent.  Both are precomputed on an extended
-        k-grid [self.ks, 10^5 Mpc^-1] and interpolated, so the
-        Limber integrand only evaluates the cheap CAMB Pmm call at the full set of
-        k-z pairs.  The grid is extended beyond self.ks so the spline captures the
-        natural NFW decay (P → 0) rather than terminating at a non-zero boundary
-        value, which would otherwise produce spurious power at high Limber l.
-        The 1-halo damping (``k_star``, see ``_apply_1h_damping``) is baked into
-        the precomputed P_1h.
-        """
-        assert self.hod is not None
-        ng       = self.n_gal()
-        p1h_grid = self.Pk_1h()                         # (n_k,) on self.ks via dot products
-        u_grid   = self.prof.k_profile(self.ks, self.ms)  # (n_k, n_M) — cache hit
-        N_hod    = self.hod.N_hod(self.ms)              # (n_M,)
-        bias     = self.hmf.bias(self.ms)                  # (n_M,) — cached on the HMF
-        weights  = self.hmf.integration_weights(self.ms)   # (n_M,) — cached on the HMF
-        F_grid   = (N_hod * bias * u_grid @ weights) / ng  # (n_k,)
+        if np.any(p1h_grid <= 0):
+            p1h_grid = np.clip(p1h_grid, 1e-300, None)
+            warnings.warn("1-halo values <=0 encountered")
 
-        # Extend precomputed grid into high-k regime where u(k,M) → 0, at
-        # ~10 points per decade, so the interpolant decays smoothly instead of
-        # hitting a sharp boundary.
-        if self.ks[-1] < self._K_1H_MAX / 10:
-            n_hi   = int(np.ceil(10 * np.log10(self._K_1H_MAX / (2 * self.ks[-1]))))
-            ks_hi  = np.geomspace(self.ks[-1] * 2, self._K_1H_MAX, n_hi)
-            u_hi   = self.prof._compute_profile(ks_hi, self.ms)         # (n_hi, n_M)
-            p1h_hi = (2.0 * (self.hod.avg_NcNs(self.ms) * u_hi    @ weights)
-                    +      (self.hod.avg_Ns2(self.ms)  * u_hi**2 @ weights)) / ng**2
-            F_hi   = (N_hod * bias * u_hi @ weights) / ng
-            ks_full      = np.concatenate([self.ks, ks_hi])
+        if np.any(Fk_grid <= 0):
+            Fk_grid = np.clip(Fk_grid, 1e-300, None)
+            warnings.warn("2-halo values <=0 encountered")
 
-            p1h_full = np.concatenate([p1h_grid, p1h_hi])
-            F_full   = np.concatenate([F_grid,   F_hi])
-        else:
-            ks_full = self.ks
-            p1h_full = p1h_grid
-            F_full = F_grid
+        p1h = np.exp(np.interp(np.log(ks), np.log(self.ks), np.log(p1h_grid)))
+        Fk = np.exp(np.interp(np.log(ks), np.log(self.ks), np.log(Fk_grid)))
+        
+        p2h = Fk**2 * self.Pk_m(ks, zs)
 
-        p1h_full = self._apply_1h_damping(p1h_full, ks_full, k_star)
-
-        log_ks_full  = np.log(ks_full)
-        ks_min, ks_max = ks_full[0], ks_full[-1]
-        # Interpolate in log-log: P_1h and F fall by many decades across the
-        # sparse high-k extension, where linear-in-P segments put kinks into
-        # C_l at high Limber l.  Power-law stretches (including the baked-in
-        # low-k damping) are exact in log-log.  The floor keeps log() finite
-        # if a tail value underflows to zero.
-        log_p1h = np.log(np.clip(p1h_full, 1e-300, None))
-        log_F   = np.log(np.clip(F_full,   1e-300, None))
-
-        def _power(ks, z):
-            # np.interp is ~9x faster than a scipy B-spline at 51k evaluation
-            # points and accurate to < 0.01% on this ~1030-point log-k grid.
-            log_k = np.log(np.clip(ks, ks_min, ks_max))
-            p1h = np.exp(np.interp(log_k, log_ks_full, log_p1h))
-            F   = np.exp(np.interp(log_k, log_ks_full, log_F))
-            result = p1h + F**2 * self.Pk_m(ks, z)
-            return np.maximum(0.0, result)   # guard against Pmm rounding below 0 at extremes
-
-        return _power
+        return p1h+p2h
 
 
     

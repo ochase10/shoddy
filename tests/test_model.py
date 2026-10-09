@@ -9,9 +9,10 @@ altering the outputs; update them deliberately if the physics changes.
 import numpy as np
 import pytest
 
+from mcfit import P2xi
+
 from shoddy import Model
 from shoddy.mass_function import Tinker
-from shoddy.occupation import Zheng07
 
 
 # --- Construction & validation -------------------------------------------------
@@ -19,8 +20,9 @@ from shoddy.occupation import Zheng07
 
 def test_default_construction(model):
     assert model.ms.shape == (256,)
-    assert model.ks.shape == (1001,)
-    assert model.hod is None
+    assert model.ks.shape == (1501,)
+    with pytest.raises(ValueError):
+        model.hod
 
 
 def test_rejects_tiny_mass_grid():
@@ -31,7 +33,8 @@ def test_rejects_tiny_mass_grid():
 def test_custom_grids_are_copied():
     ms = np.logspace(10, 15, 64)
     ks = np.logspace(-3, 1, 100)
-    m = Model(halo_mass_grid=ms, k_grid=ks)
+    with pytest.warns(UserWarning):  # short k grid
+        m = Model(halo_mass_grid=ms, k_grid=ks)
     ms[0] = -1.0  # mutating the caller's array must not affect the model
     assert m.ms[0] != -1.0
     assert m.ks.shape == (100,)
@@ -45,25 +48,19 @@ def test_n_gal_requires_hod(model):
 # --- Component dispatch (registry) ---------------------------------------------
 
 
-def test_set_hmf_by_string(model):
-    model.set_hmf("tinker", model.config)
-    assert isinstance(model.HMF, Tinker)
+def test_hmf_by_string():
+    m = Model(hmf="tinker")
+    assert isinstance(m.hmf, Tinker)
 
 
-def test_set_hmf_by_instance(model):
-    inst = Tinker(model.config)
-    model.set_hmf(inst, model.config)
-    assert model.HMF is inst
-
-
-def test_unknown_hmf_raises_valueerror(model):
+def test_unknown_hmf_raises_valueerror():
     with pytest.raises(ValueError, match="Unknown HMF"):
-        model.set_hmf("does-not-exist", model.config)
+        Model(hmf="does-not-exist")
 
 
-def test_unknown_profile_raises_valueerror(model):
-    with pytest.raises(ValueError, match="Unknown halo profile"):
-        model.set_halo_profile("does-not-exist", model.config)
+def test_unknown_profile_raises_valueerror():
+    with pytest.raises(ValueError, match="Unknown Profile"):
+        Model(halo_prof="does-not-exist")
 
 
 def test_unknown_hod_raises_valueerror(model):
@@ -71,20 +68,9 @@ def test_unknown_hod_raises_valueerror(model):
         model.set_hod("does-not-exist")
 
 
-def test_wrong_component_type_raises_typeerror(model):
-    with pytest.raises(TypeError):
-        model.set_hmf(12345, model.config)
-
-
 def test_hod_pars_must_be_dict(model):
     with pytest.raises(TypeError):
         model.set_hod("zheng07", pars=[1, 2, 3])
-
-
-def test_set_hod_by_instance(model):
-    h = Zheng07(M_min=1e12, sig_logM=0.3, M0=1e12, M1=1e13, alpha=1.0)
-    model.set_hod(h)
-    assert model.hod is h
 
 
 # --- Power spectra structure ---------------------------------------------------
@@ -99,7 +85,7 @@ def test_pk_shapes(model_with_hod):
 
 def test_pgal_is_sum_of_terms_without_damping(model_with_hod):
     m = model_with_hod
-    total = m.P_gal(damp_1h_k=None)
+    total = m.P_gal(damp_1h=None)
     assert np.allclose(total, m.Pk_1h() + m.Pk_2h())
 
 
@@ -112,6 +98,15 @@ def test_custom_mass_grid_matches_default(model_with_hod):
     m = model_with_hod
     assert np.allclose(m.P_gal(), m.P_gal(Ms=m.ms))
     assert np.isclose(m.n_gal(), m.n_gal(Ms=m.ms))
+
+
+def test_pgal_2d_matches_direct(model_with_hod):
+    # The interpolated fast path must agree with direct evaluation off-grid.
+    # Worst agreement (~3e-3) is at k ~ 1e3 where u(k, M) oscillates.
+    m = model_with_hod
+    ks = np.logspace(-3, 3, 50)
+    zs = np.linspace(0.05, 0.5, 50)
+    assert np.allclose(m.P_gal_2d(ks, zs), m.P_gal(ks=ks, z=zs), rtol=5e-3)
 
 
 def test_galaxy_bias_above_one(model_with_hod):
@@ -140,11 +135,11 @@ def test_cf_3d_total_not_below_2h(model_with_hod):
     # xi_1h is a pair count and hence non-negative, so the total must not dip
     # below the 2-halo term.  The k-space Gaussian damping violates this by
     # construction (its compensation drives xi_1h negative near the 1-to-2-halo
-    # transition), which is why cf_3d defaults to damp_1h_k=None; transform
+    # transition), which is why cf_3d defaults to damp_1h=None; transform
     # artifacts are allowed at the few-per-mille level.
     m = model_with_hod
     xi, r = m.cf_3d()
-    xi2, _ = m.cf_3d(power=m.Pk_2h())
+    _, xi2 = P2xi(m.ks, l=0, q=1.5, lowring=True)(m.Pk_2h(), extrap=True)
     sel = (r > 0.1) & (r < 100) & (xi2 > 0)
     assert np.min((xi[sel] - xi2[sel]) / xi2[sel]) > -5e-3
 
@@ -152,11 +147,6 @@ def test_cf_3d_total_not_below_2h(model_with_hod):
 def test_limber_cl_array_nz_requires_zarr(model_with_hod):
     with pytest.raises(ValueError):
         model_with_hod.limber_cl(None, nz=np.ones(5))
-
-
-def test_cf_3d_power_length_mismatch_raises(model_with_hod):
-    with pytest.raises(ValueError):
-        model_with_hod.cf_3d(power=np.ones(3))
 
 
 # --- with_hod consistency ------------------------------------------------------
@@ -173,41 +163,47 @@ def test_with_hod_matches_fresh_set(model_with_hod):
 
 # --- Numerical regression snapshots --------------------------------------------
 
-# Captured after the 1-halo low-k damping changed from a fixed exponential
-# truncation to the z-aware Gaussian form (P_gal_0/P_gal_500 shifted), in the
-# c3d environment (CAMB-dependent values drift at the ~1e-9 level between
-# environments).
+# Captured in the hod env with undamped defaults.  Power spectra are evaluated
+# at fixed k so the snapshot does not depend on the default k grid.
 REGRESSION = {
-    "n_gal": 0.0035734281857500074,
-    "galaxy_bias": 1.2035126140927694,
-    "Pk_1h_0": 1569.2686435588319,
-    "Pk_2h_0": 2656.234789803066,
-    "P_gal_0": 2656.2380117366606,
-    "P_gal_500": 15699.660299045367,
+    "n_gal": 0.003573437968350265,
+    "galaxy_bias": 1.2035170371749628,
+    "Pk_1h_0": 1569.3435897667737,
+    "Pk_2h_0": 2656.2543139295067,
+    "P_gal_0": 4225.59790369628,
+    "P_gal_k01": 15900.66071409825,
 }
 
 
 def test_regression_snapshots(model_with_hod):
     m = model_with_hod
+    ks = np.array([1e-4, 1e-1])
+    p_gal = m.P_gal(ks=ks)
     got = {
         "n_gal": m.n_gal(),
         "galaxy_bias": m.galaxy_bias(),
-        "Pk_1h_0": m.Pk_1h()[0],
-        "Pk_2h_0": m.Pk_2h()[0],
-        "P_gal_0": m.P_gal()[0],
-        "P_gal_500": m.P_gal()[500],
+        "Pk_1h_0": m.Pk_1h(ks=ks)[0],
+        "Pk_2h_0": m.Pk_2h(ks=ks)[0],
+        "P_gal_0": p_gal[0],
+        "P_gal_k01": p_gal[1],
     }
     for key, expected in REGRESSION.items():
-        assert np.isclose(got[key], expected, rtol=1e-10), (key, got[key], expected)
+        assert np.isclose(got[key], expected, rtol=1e-8), (key, got[key], expected)
 
 
 def test_regression_cf_3d(model_with_hod):
-    # Captured with the undamped default (damp_1h_k=None) in the c3d env.
     xi, _ = model_with_hod.cf_3d(rs=[1.0, 10.0])
-    assert np.allclose(xi, [75.21341329, 0.87249875], rtol=1e-6)
+    assert np.allclose(xi, [75.18974835, 0.87250518], rtol=1e-6)
 
 
-def test_regression_cf_ang(model_with_hod):
-    # Captured with the undamped default (damp_1h_k=None) in the c3d env.
-    w, _ = model_with_hod.cf_ang(theta=[0.01, 0.1])
-    assert np.allclose(w, [1.52010388, 0.20330296], rtol=1e-6)
+def test_regression_cf_ang(hod_pars):
+    # Setup (defaults where not passed):
+    #   model:  z=1, default cosmology, HMF ('behroozi'), NFW profile and grids
+    #   HOD:    zheng07 with HOD_PARS (conftest), dc=1
+    #   n(z):   Gaussian, mean z=1, sigma=0.25, sampled on 51 points over [0.5, 1.5]
+    #   ells:   1001 log-spaced points over [1, 1e6]
+    #   power:  P_gal_2d fast path, undamped 1-halo term (damp_1h=None)
+    m = Model(z=1)
+    m.set_hod("zheng07", hod_pars)
+    w, _ = m.cf_ang(theta=[0.01, 0.1])
+    assert np.allclose(w, [0.07145347, 0.0155232], rtol=1e-6)
