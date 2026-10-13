@@ -92,6 +92,11 @@ class HaloConfig:
         self._z_sigma_idx = int(np.argmin(np.abs(usezs - self.z)))
 
 
+    @property
+    def cosmology_parameters(self):
+        return self.cosmo_pars.copy()
+
+
     def Pk_m(self, ks, z=None):
 
         if z is None:
