@@ -263,7 +263,7 @@ class Model():
         theta_out = np.rad2deg(theta_out)
 
         if theta is not None:
-            wtheta = make_interp_spline(theta_out, wtheta)(theta)
+            wtheta = make_interp_spline(np.log(theta_out), wtheta)(np.log(theta))
             theta_out = theta
 
         return wtheta, theta_out
