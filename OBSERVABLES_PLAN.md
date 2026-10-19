@@ -42,7 +42,7 @@ This is an additional path, not a replacement for `Model` / `with_hod`.
 
 ## Design decisions
 
-- [ ] **Decide:** how the target observable is specified
+- [x] **Decide:** how the target observable is specified
   - One class per observable (`WTheta`, `Xi3D`, `NGal`, ...) with a small shared base — *suggested*
   - Single class with string dispatch (`Predictor(model, "cf_ang", ...)`) — drifts toward the old caching API
 - [ ] **Decide:** `__call__` signature
@@ -53,7 +53,7 @@ This is an additional path, not a replacement for `Model` / `with_hod`.
     (`return WTheta(self, theta, ...)(self)`) — *suggested*; single source of truth
   - Keep `Model` methods; observables reimplement assembly — duplication, needs agreement test
   - Remove observables from `Model` entirely — cleanest split, breaks API
-- [ ] **Decide:** fate of generic `power_func` in `cf_ang` / `limber_cl`
+- [x] **Decide:** fate of generic `power_func` in `cf_ang` / `limber_cl`
   - Fast path needs P_gal = HOD terms x `Pk_m` to precompute `Pk_m`; an arbitrary `power_func` breaks that
   - Options: keep `limber_cl(power_func, ...)` as a standalone utility the fast class doesn't use, or drop the argument
 - [ ] **Decide:** joint fits — thin composite wrapper holding several observables, or leave to user code

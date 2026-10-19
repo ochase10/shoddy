@@ -39,7 +39,7 @@ Items marked **Decide** need a design choice before implementation.
 - [x] **Decide:** whether HOD takes the config like HMF/profile, or stays config-free (and document why)
 - [x] `set_hmf` / `set_halo_profile`: drop the `config` argument; use the Model's own
 - [x] `HOD` base: remove `**kwargs` and the `pars = {}` placeholder overwritten by subclasses
-- [ ] Move `conc` to `NFW` (Duffy-type parameters are NFW-specific); reuse `Ac` inside `NFW._compute_profile`
+- [x] Move `conc` to `NFW` (Duffy-type parameters are NFW-specific); reuse `Ac` inside `NFW._compute_profile`
 
 ## Phase 4 — Deduplicate model.py
 
@@ -58,8 +58,8 @@ Items marked **Decide** need a design choice before implementation.
 
 ## Phase 6 — Naming and docs
 
-- [ ] **Decide:** naming convention for spectra/correlation methods (`Pk_1h`, `P_gal`, `matter_power_spectrum`, `cf_3d`, `cf_ang`, `galaxy_bias`)
-- [ ] Consistent attribute names (`HMF`, `prof`, `hod`)
+- [x] **Decide:** naming convention for spectra/correlation methods (`Pk_1h`, `P_gal`, `matter_power_spectrum`, `cf_3d`, `cf_ang`, `galaxy_bias`)
+- [x] Consistent attribute names (`HMF`, `prof`, `hod`)
 - [x] Trim docstrings/comments that explain past bug fixes (e.g. `halo_config.py` ρ_m comment, `_build_fast_power_func`, `caching.py` module doc incl. nonexistent `_invalidate_all`)
 - [ ] Real package docstring in `__init__.py`; implement or drop `Zheng07.__str__` TODO
 - [ ] Update `README.md` and `demo.ipynb` for any API changes

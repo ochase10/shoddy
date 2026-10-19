@@ -100,13 +100,30 @@ def test_custom_mass_grid_matches_default(model_with_hod):
     assert np.isclose(m.n_gal(), m.n_gal(Ms=m.ms))
 
 
-def test_pgal_2d_matches_direct(model_with_hod):
-    # The interpolated fast path must agree with direct evaluation off-grid.
-    # Worst agreement (~3e-3) is at k ~ 1e3 where u(k, M) oscillates.
+def test_interpolated_terms_match_direct(model_with_hod):
+    # Grid amplitudes log-interpolated off-grid (the Limber path) must agree with
+    # direct evaluation. Worst agreement (~3e-3) is at k ~ 1e3 where u(k, M) oscillates.
+    from shoddy.model import _log_interp
+
     m = model_with_hod
     ks = np.logspace(-3, 3, 50)
     zs = np.linspace(0.05, 0.5, 50)
-    assert np.allclose(m.P_gal_2d(ks, zs), m.P_gal(ks=ks, z=zs), rtol=5e-3)
+    A, B = m._resolve_terms(None)
+    p_interp = _log_interp(ks, m.ks, A) + _log_interp(ks, m.ks, B) * m.Pk_m(ks, zs)
+    assert np.allclose(p_interp, m.P_gal(ks=ks, z=zs), rtol=5e-3)
+
+
+def test_resolve_terms_buckets(model_with_hod):
+    m = model_with_hod
+    A, B = m._resolve_terms(["1h"])
+    assert B is None and np.allclose(A, m.Pk_1h())
+    A, B = m._resolve_terms(["2h"])
+    assert A is None and np.allclose(B, m.F_k() ** 2)
+
+
+def test_resolve_terms_unknown_raises(model_with_hod):
+    with pytest.raises(KeyError):
+        model_with_hod._resolve_terms(["bogus"])
 
 
 def test_galaxy_bias_above_one(model_with_hod):
@@ -144,9 +161,20 @@ def test_cf_3d_total_not_below_2h(model_with_hod):
     assert np.min((xi[sel] - xi2[sel]) / xi2[sel]) > -5e-3
 
 
-def test_limber_cl_array_nz_requires_zarr(model_with_hod):
+def test_limber_setup_array_nz_requires_zarr(model_with_hod):
     with pytest.raises(ValueError):
-        model_with_hod.limber_cl(None, nz=np.ones(5))
+        model_with_hod._limber_setup(None, np.ones(5))
+
+
+def test_cf_ang_terms_sum_to_total(hod_pars):
+    # w(theta) is linear in P, so per-term results must sum to the total.
+    m = Model(z=1)
+    m.set_hod("zheng07", hod_pars)
+    theta = np.logspace(-3, 0, 10)
+    w_tot, _ = m.cf_ang(theta=theta)
+    w_1h, _ = m.cf_ang(terms=["1h"], theta=theta)
+    w_2h, _ = m.cf_ang(terms=["2h"], theta=theta)
+    assert np.allclose(w_1h + w_2h, w_tot, rtol=1e-10)
 
 
 # --- with_hod consistency ------------------------------------------------------
@@ -202,7 +230,7 @@ def test_regression_cf_ang(hod_pars):
     #   HOD:    zheng07 with HOD_PARS (conftest), dc=1
     #   n(z):   Gaussian, mean z=1, sigma=0.25, sampled on 51 points over [0.5, 1.5]
     #   ells:   1001 log-spaced points over [1, 1e6]
-    #   power:  P_gal_2d fast path, undamped 1-halo term (damp_1h=None)
+    #   power:  all terms (1h + 2h), undamped 1-halo term (damp_1h=None)
     m = Model(z=1)
     m.set_hod("zheng07", hod_pars)
     w, _ = m.cf_ang(theta=[0.01, 0.1])

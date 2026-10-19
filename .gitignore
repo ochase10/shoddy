@@ -219,3 +219,5 @@ __marimo__/
 
 # Exploratory notebooks under tests/ are not tracked, but the pytest suite is.
 tests/*.ipynb
+# Claude Code local config
+.claude/

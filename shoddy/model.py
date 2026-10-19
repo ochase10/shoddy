@@ -45,6 +45,18 @@ def _check_k_grid(ks, warn_k=1e4):
                        correlation function computations.")
 
 
+def _log_interp(new_x, old_x, arr):
+
+    if arr is None:
+        return 0
+            
+    if np.any(arr <= 0):
+        arr = np.clip(arr, 1e-300, None)
+        warnings.warn("<=0 values encountered when interpolating")
+
+    return np.exp(np.interp(np.log(new_x), np.log(old_x), np.log(arr)))
+
+
 class Model():
 
     def __init__(
@@ -204,28 +216,42 @@ class Model():
     def P_gal(self, ks=None, z=None, Ms=None, damp_1h=None):
         return self.Pk_1h(ks=ks, Ms=Ms, damp=damp_1h) + self.Pk_2h(ks=ks, Ms=Ms, z=z)
 
-    
-    def limber_cl(self, power_func, z_arr=None, nz=None, ls=None):
 
-        z_arr, nz = _resolve_nz(self.z, z_arr, nz)
-    
+    def _limber_setup(self, zs, nz, ls=None):
+
+        z_arr, nz = _resolve_nz(self.z, zs, nz)
         h_z = self.config.cosmo.hubble_parameter(z_arr)
         chi_z = self.config.cosmo.comoving_radial_distance(z_arr)
-
-        ls = np.logspace(0, 6, 1001) if ls is None else np.asarray(ls)
-
-        ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_l)
-
-        z_2d = np.broadcast_to(z_arr[:,None], ks_2d.shape)
-
-        ks_flat, z_flat = ks_2d.ravel(), z_2d.ravel()
-
-        power_2d = power_func(ks_flat, z_flat).reshape(ks_2d.shape)
         kernel = h_z * nz**2 / C / chi_z**2
 
-        cl = _trapz(kernel[:,None] * power_2d, z_arr, axis=0)
+        ls = np.logspace(0, 6, 1001) if ls is None else np.asarray(ls)
+        
+        ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_l)
 
-        return cl, ls
+        z_2d = np.broadcast_to(z_arr[:, None], ks_2d.shape)
+
+        pkm = self.Pk_m(ks=ks_2d.ravel(), z=z_2d.ravel()).reshape(ks_2d.shape)
+        
+
+        return ls, kernel, ks_2d, z_arr, pkm
+
+
+    
+    def _limber_compute(self, terms, kernel, k2d, z_arr, Ms, damp_1h, pkm):
+
+        z_ind, z_dep = self._resolve_terms(terms, ks=None, Ms=Ms, damp=damp_1h)
+        
+        ind_interp = _log_interp(k2d, self.ks, z_ind)
+        dep_interp = _log_interp(k2d, self.ks, z_dep)
+        
+        power = ind_interp
+        if z_dep is not None:
+            power += pkm * dep_interp
+
+        
+        cl = _trapz(kernel[:,None] * power, z_arr, axis=0)
+
+        return cl
 
 
     def cf_3d(self, rs=None, Ms=None, ks=None, damp_1h=None):
@@ -248,15 +274,13 @@ class Model():
         return xi, r
 
 
-    def cf_ang(self, power_func=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h=None):
+    def cf_ang(self, terms=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h=None):
         """
         Angular galaxy correlation function w(theta) via Limber + Hankel.
         """
 
-        if power_func is None:
-            power_func = lambda ks, zs: self.P_gal_2d(ks=ks, zs=zs, Ms=Ms, damp_1h=damp_1h)
-
-        cl, ls = self.limber_cl(power_func, z_arr=z_arr, nz=nz, ls=ls)
+        ls, kernel, ks_2d, zs, pkm = self._limber_setup(z_arr, nz, ls)
+        cl = self._limber_compute(terms, kernel, ks_2d, zs, Ms, damp_1h, pkm)
 
         # Hankel computes ∫ a(l) J_0(θl) l dl; cl/(2π) gives w(θ) directly
         theta_out, wtheta = Hankel(ls, nu=0, q=1, lowring=True)(cl / (2 * np.pi), extrap=True)
@@ -269,27 +293,30 @@ class Model():
         return wtheta, theta_out
 
 
-    def P_gal_2d(self, ks, zs, Ms=None, damp_1h=None):
+    def _resolve_terms(self, terms, **kwargs):
+        if terms is None:
+            terms = _TERMS.keys()
+        A = None
+        B = None
+        for term in terms:
+            fn, which = _TERMS[term]
+            amp = fn(self, **kwargs)
+            if which == 'k':
+                if A is None:
+                    A = amp
+                else:
+                    A = A + amp
+            elif which == 'pkm':
+                if B is None:
+                    B = amp
+                else:
+                    B = B + amp
+            else:
+                raise ValueError("Unrecognized term type")
 
-        p1h_grid = self.Pk_1h(ks=None, Ms=Ms, damp=damp_1h)
-        Fk_grid = self.F_k(ks=None, Ms=Ms)
-
-        if np.any(p1h_grid <= 0):
-            p1h_grid = np.clip(p1h_grid, 1e-300, None)
-            warnings.warn("1-halo values <=0 encountered")
-
-        if np.any(Fk_grid <= 0):
-            Fk_grid = np.clip(Fk_grid, 1e-300, None)
-            warnings.warn("2-halo values <=0 encountered")
-
-        p1h = np.exp(np.interp(np.log(ks), np.log(self.ks), np.log(p1h_grid)))
-        Fk = np.exp(np.interp(np.log(ks), np.log(self.ks), np.log(Fk_grid)))
-        
-        p2h = Fk**2 * self.Pk_m(ks, zs)
-
-        return p1h+p2h
-
+        return (A, B)
 
     
-    
+_TERMS = {'1h': (lambda m, ks=None, Ms=None, damp=None, **kw: m.Pk_1h(ks=ks, Ms=Ms, damp=damp), 'k'),
+          '2h': (lambda m, ks=None, Ms=None, **kw: m.F_k(ks=ks, Ms=Ms)**2, 'pkm')}
         
