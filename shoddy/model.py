@@ -3,58 +3,15 @@ import copy, warnings
 from numbers import Real
 
 import numpy as np
-from scipy.interpolate import make_interp_spline
-from scipy.stats import norm
-from mcfit import P2xi, Hankel
-
 from . import mass_function, occupation, profile
 from .utils import C, _trapz, lookup
 from .config import HaloConfig, _EXTRAP_K_MAX, _INTERP_K_MAX
-
-
-
-def _resolve_nz(z, z_arr, nz):
-
-    if nz is None and z_arr is None:
-        z_arr = np.linspace(max(z - 0.5, 0.01), z + 0.5, 51)
-        nz = norm.pdf(z_arr, z, 0.25)
-    elif nz is None or z_arr is None:
-        raise ValueError("nz and z_arr arguments cannot be passed alone")
-    
-    nz = np.asarray(nz)
-    z_arr = np.asarray(z_arr)
-
-    if len(nz) != len(z_arr):
-        raise ValueError("nz and z_arr must be the same length")
-
-    mask = z_arr > 0
-    z_arr = z_arr[mask]
-    nz = nz[mask]
-
-    if len(z_arr) < 2:
-        raise ValueError("z_arr must contain at least 2 positive redshift samples")
-
-    nz_norm = nz / _trapz(nz, z_arr)
-
-    return z_arr, nz_norm
 
 
 def _check_k_grid(ks, warn_k=1e4):
     if np.max(ks) < warn_k:
         warnings.warn("k grid may not extend high enough to allow for accurate \
                        correlation function computations.")
-
-
-def _log_interp(new_x, old_x, arr):
-
-    if arr is None:
-        return 0
-            
-    if np.any(arr <= 0):
-        arr = np.clip(arr, 1e-300, None)
-        warnings.warn("<=0 values encountered when interpolating")
-
-    return np.exp(np.interp(np.log(new_x), np.log(old_x), np.log(arr)))
 
 
 class Model():
@@ -113,6 +70,7 @@ class Model():
         if self._hod is None:
             raise ValueError("HOD not defined")
         return self._hod
+
 
     def Pk_m(self, ks, z=None):
         return self.config.Pk_m(ks, z)
@@ -213,88 +171,20 @@ class Model():
         return self.Pk_m(ks, z) * Fk**2
 
 
-    def P_gal(self, ks=None, z=None, Ms=None, damp_1h=None):
-        return self.Pk_1h(ks=ks, Ms=Ms, damp=damp_1h) + self.Pk_2h(ks=ks, Ms=Ms, z=z)
+    def P_gal(self, terms=None, ks=None, z=None, Ms=None, damp_1h=None):
 
-
-    def _limber_setup(self, zs, nz, ls=None):
-
-        z_arr, nz = _resolve_nz(self.z, zs, nz)
-        h_z = self.config.cosmo.hubble_parameter(z_arr)
-        chi_z = self.config.cosmo.comoving_radial_distance(z_arr)
-        kernel = h_z * nz**2 / C / chi_z**2
-
-        ls = np.logspace(0, 6, 1001) if ls is None else np.asarray(ls)
+        z_ind, z_dep = self._resolve_terms(terms, ks=ks, Ms=Ms, damp=damp_1h)
+        z_ind = 0 if z_ind is None else z_ind
+        z_dep = 0 if z_dep is None else z_dep
         
-        ks_2d = (ls[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_l)
-
-        z_2d = np.broadcast_to(z_arr[:, None], ks_2d.shape)
-
-        pkm = self.Pk_m(ks=ks_2d.ravel(), z=z_2d.ravel()).reshape(ks_2d.shape)
-        
-
-        return ls, kernel, ks_2d, z_arr, pkm
-
-
-    
-    def _limber_compute(self, terms, kernel, k2d, z_arr, Ms, damp_1h, pkm):
-
-        z_ind, z_dep = self._resolve_terms(terms, ks=None, Ms=Ms, damp=damp_1h)
-        
-        ind_interp = _log_interp(k2d, self.ks, z_ind)
-        dep_interp = _log_interp(k2d, self.ks, z_dep)
-        
-        power = ind_interp
-        if z_dep is not None:
-            power += pkm * dep_interp
-
-        
-        cl = _trapz(kernel[:,None] * power, z_arr, axis=0)
-
-        return cl
-
-
-    def cf_3d(self, rs=None, Ms=None, ks=None, damp_1h=None):
-        """
-        3-D galaxy correlation function via FFTLog.
-        """
-        if ks is not None:
-            _check_k_grid(ks)
-
-        p_gal = self.P_gal(ks, Ms=Ms, damp_1h=damp_1h)
-
         ks = self.ks if ks is None else ks
-        
-        r, xi = P2xi(ks, l=0, q=1.5, lowring=True)(p_gal, extrap=True)
-
-        if rs is not None:
-            xi = make_interp_spline(np.log(r), xi)(np.log(rs))
-            r = rs
-
-        return xi, r
-
-
-    def cf_ang(self, terms=None, theta=None, nz=None, z_arr=None, Ms=None, ls=None, damp_1h=None):
-        """
-        Angular galaxy correlation function w(theta) via Limber + Hankel.
-        """
-
-        ls, kernel, ks_2d, zs, pkm = self._limber_setup(z_arr, nz, ls)
-        cl = self._limber_compute(terms, kernel, ks_2d, zs, Ms, damp_1h, pkm)
-
-        # Hankel computes ∫ a(l) J_0(θl) l dl; cl/(2π) gives w(θ) directly
-        theta_out, wtheta = Hankel(ls, nu=0, q=1, lowring=True)(cl / (2 * np.pi), extrap=True)
-        theta_out = np.rad2deg(theta_out)
-
-        if theta is not None:
-            wtheta = make_interp_spline(np.log(theta_out), wtheta)(np.log(theta))
-            theta_out = theta
-
-        return wtheta, theta_out
+        return z_ind + self.Pk_m(ks, z) * z_dep
 
 
     def _resolve_terms(self, terms, **kwargs):
-        if terms is None:
+        if isinstance(terms, str):
+            terms = [terms]
+        if not terms:
             terms = _TERMS.keys()
         A = None
         B = None
