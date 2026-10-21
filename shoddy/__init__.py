@@ -11,5 +11,5 @@ __license__ = "MIT"
 from .model import Model
 from .mass_function import MassFunction
 from .occupation import HOD
-from .profile import Profile
+from .profile import HaloProfile
 from .observables import ACF

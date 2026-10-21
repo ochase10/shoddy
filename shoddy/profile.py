@@ -6,7 +6,7 @@ from scipy.special import sici
 
 
 
-class Profile(ABC):
+class HaloProfile(ABC):
 
     def __init__(self, config):
         self.config = config
@@ -30,7 +30,7 @@ class Profile(ABC):
         return np.log(1+c) - c/(1+c)
 
 
-class NFW(Profile):
+class NFW(HaloProfile):
 
     def _u(self, ks, M):
         if not isinstance(M, np.ndarray):

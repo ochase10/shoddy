@@ -18,6 +18,8 @@ class Model():
             halo_prof='nfw',
             hod=None,
             hod_pars=None,
+            multiplicity=0,
+            gal_prof='gauss',
             halo_mass_grid=None,
             k_grid=None,
             z_range=None,
@@ -32,14 +34,17 @@ class Model():
 
 
 
-        self.profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
+        self.halo_profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
         self.hmf = lookup(mass_function.MODELS, hmf, "HMF")(self.config)
-        self.dndm = self.hmf.dndm(self.ms)
 
         if hod is not None:
             self.set_hod(hod, hod_pars)
         else:
             self._hod = None
+
+
+
+        self.dndm = self.hmf.dndm(self.ms)
 
         sig_d2 = _trapz(self.Pk_m(self.ks), self.ks) / (6 * np.pi**2)
         self.k_star = 0.584 / np.sqrt(sig_d2)
@@ -76,7 +81,17 @@ class Model():
         self._hod = lookup(occupation.MODELS, new_hod, "HOD")(**pars)
 
 
-    def update_hod_pars(self, **new_pars):
+    def set_gal_occ(self, new_occ, pars=None):
+        return
+
+
+    def _separate_pars(self, pars_dict):
+        return 
+
+
+    def update_pars(self, **new_pars):
+
+        #code for discriminating hod vs gal_occ pars
         self.hod.update_pars(**new_pars)
 
 
@@ -115,7 +130,6 @@ class Model():
 
 
     def Pk_ss(self, Ms, u, ng):
-
         igrand = self.hod.avg_Ns2(Ms)[None, :] * u**2
         res = self.hmf.halo_integral(Ms, igrand, axis=1)
         return res / ng**2
@@ -128,7 +142,7 @@ class Model():
 
 
     def Pk_1h(self, ks=None, Ms=None, damp=None):
-        u = self.profile.u(ks, Ms)
+        u = self.halo_profile.u(ks, Ms)
         ks, Ms = self._grids(ks, Ms)
 
         ng = self.n_gal(Ms)
@@ -146,7 +160,7 @@ class Model():
 
 
     def F_k(self, ks=None, Ms=None):
-        u = self.profile.u(ks, Ms)
+        u = self.halo_profile.u(ks, Ms)
         ks, Ms = self._grids(ks, Ms)
         
         ng = self.n_gal(Ms)
