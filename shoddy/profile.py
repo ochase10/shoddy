@@ -6,22 +6,33 @@ from scipy.special import sici
 
 
 
-class HaloProfile(ABC):
+class Profile(ABC):
 
     def __init__(self, config):
         self.config = config
+        self.u_cache = self._u(config.ks, config.mass_grid)
+
+
+    def u(self, ks=None, Ms=None):
+        use_cache = ks is None and Ms is None
+        Ms = self.config.mass_grid if Ms is None else Ms
+        ks = self.config.ks if ks is None else ks
+
+        u = self.u_cache if use_cache else self._u(ks, Ms)
+
+        return u
 
     @abstractmethod
-    def u(self, ks, M) -> NDArray[np.floating]:
+    def _u(self, ks, M) -> NDArray[np.floating]:
         pass
 
     def Ac(self, c):
         return np.log(1+c) - c/(1+c)
 
 
-class NFW(HaloProfile):
+class NFW(Profile):
 
-    def u(self, ks, M):
+    def _u(self, ks, M):
         if not isinstance(M, np.ndarray):
             M = np.array(M)
 

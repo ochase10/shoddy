@@ -1,4 +1,6 @@
 
+import warnings
+
 from .utils import *
 from . import mass_function, occupation, profile
 
@@ -7,6 +9,13 @@ from scipy.interpolate import make_interp_spline
 
 _INTERP_K_MAX = 2e2
 _EXTRAP_K_MAX = 1e5
+
+
+def _check_k_grid(ks, warn_k=1e4):
+    if np.max(ks) < warn_k:
+        warnings.warn("k grid may not extend high enough to allow for accurate \
+                       correlation function computations.")
+
 
 class HaloConfig:
 
@@ -28,13 +37,23 @@ class HaloConfig:
                  cosmo_pars=None,
                  mass_grid=None,
                  z_range=None,
-                 kmax=200.,
+                 k_grid=None,
+                 kmax=None,
                  dens_crit=1.686,
                  delta=200.):
 
         self.z = z
         self.crit = dens_crit
         self.delta = delta
+
+        kmax = _INTERP_K_MAX if kmax is None else kmax
+
+        if k_grid is not None:
+            self.ks = np.asarray(k_grid).copy()
+            _check_k_grid(self.ks)
+
+        else:
+            self.ks = np.logspace(np.log10(1e-4), np.log10(_EXTRAP_K_MAX), 1501)
 
         self.cosmo_pars = self._default_cosmo_pars.copy()
         if cosmo_pars is not None:
@@ -48,7 +67,7 @@ class HaloConfig:
         self.rho_m = rhocrit0 * (self.cosmo.get_Omega('cdm', 0) + self.cosmo.get_Omega('baryon', 0) + self.cosmo.get_Omega("nu", 0))
 
         if mass_grid is None:
-            mass_grid = np.logspace(9, 17, 256)
+            mass_grid = np.logspace(6, 15, 256)
         elif len(mass_grid) <= 2:
             raise ValueError("Halo mass grid must contain more than 2 values")
         self.mass_grid = np.asarray(mass_grid).copy()

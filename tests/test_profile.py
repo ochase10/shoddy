@@ -23,9 +23,11 @@ def test_profile_finite_everywhere(model):
     assert u.shape == (len(model.ks), len(model.ms))
 
 
-def test_u_grid_matches_profile(model):
-    # The cached u_grid must equal a direct evaluation on the model grids.
-    assert np.allclose(model.u_grid, model.profile.u(model.ks, model.ms))
+def test_u_cache_matches_profile(model):
+    # The no-argument (cached) path must equal a direct evaluation on the grids.
+    prof = model.profile
+    assert prof.u() is prof.u_cache
+    assert np.allclose(prof.u(), prof.u(model.ks, model.ms))
 
 
 def test_concentration_decreases_with_mass(model):

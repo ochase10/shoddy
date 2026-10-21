@@ -1,17 +1,11 @@
 
-import copy, warnings
+import copy
 from numbers import Real
 
 import numpy as np
 from . import mass_function, occupation, profile
 from .utils import C, _trapz, lookup
-from .config import HaloConfig, _EXTRAP_K_MAX, _INTERP_K_MAX
-
-
-def _check_k_grid(ks, warn_k=1e4):
-    if np.max(ks) < warn_k:
-        warnings.warn("k grid may not extend high enough to allow for accurate \
-                       correlation function computations.")
+from .config import HaloConfig
 
 
 class Model():
@@ -27,24 +21,18 @@ class Model():
             halo_mass_grid=None,
             k_grid=None,
             z_range=None,
-            camb_kmax=_INTERP_K_MAX):
+            camb_kmax=None):
 
-        if k_grid is not None:
-            self.ks = np.asarray(k_grid).copy()
-            _check_k_grid(self.ks)
-
-        else:
-            self.ks = np.logspace(np.log10(1e-4), np.log10(_EXTRAP_K_MAX), 1501)
-
-        self.config = HaloConfig(z,
-                                 cosmo_pars,
+        self.config = HaloConfig(z=z,
+                                 cosmo_pars=cosmo_pars,
                                  mass_grid=halo_mass_grid,
                                  z_range=z_range,
+                                 k_grid=k_grid,
                                  kmax=camb_kmax)
 
-        self.profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
-        self.u_grid = self.profile.u(self.ks, self.ms)
 
+
+        self.profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
         self.hmf = lookup(mass_function.MODELS, hmf, "HMF")(self.config)
         self.dndm = self.hmf.dndm(self.ms)
 
@@ -64,6 +52,10 @@ class Model():
     @property
     def ms(self):
         return self.config.mass_grid
+
+    @property
+    def ks(self):
+        return self.config.ks
 
     @property
     def hod(self):
@@ -129,18 +121,15 @@ class Model():
         return res / ng**2
 
 
-    def _k_m_profile(self, ks, Ms):
-        use_cache = ks is None and Ms is None
-        Ms = self.ms if Ms is None else Ms
+    def _grids(self, ks=None, Ms=None):
         ks = self.ks if ks is None else ks
-
-        u = self.u_grid if use_cache else self.profile.u(ks, Ms)
-
-        return ks, Ms, u
+        Ms = self.ms if Ms is None else Ms
+        return ks, Ms
 
 
     def Pk_1h(self, ks=None, Ms=None, damp=None):
-        ks, Ms, u = self._k_m_profile(ks, Ms)
+        u = self.profile.u(ks, Ms)
+        ks, Ms = self._grids(ks, Ms)
 
         ng = self.n_gal(Ms)
 
@@ -157,7 +146,8 @@ class Model():
 
 
     def F_k(self, ks=None, Ms=None):
-        ks, Ms, u = self._k_m_profile(ks, Ms)
+        u = self.profile.u(ks, Ms)
+        ks, Ms = self._grids(ks, Ms)
         
         ng = self.n_gal(Ms)
         igrand = self.hod.N_hod(Ms)[None, :] * self.hmf.bias(Ms)[None, :] * u
@@ -167,7 +157,7 @@ class Model():
 
     def Pk_2h(self, ks=None, z=None, Ms=None):
         Fk = self.F_k(ks, Ms)
-        ks = self.ks if ks is None else ks
+        ks, _ = self._grids(ks)
         return self.Pk_m(ks, z) * Fk**2
 
 
@@ -177,7 +167,7 @@ class Model():
         z_ind = 0 if z_ind is None else z_ind
         z_dep = 0 if z_dep is None else z_dep
         
-        ks = self.ks if ks is None else ks
+        ks, _ = self._grids(ks)
         return z_ind + self.Pk_m(ks, z) * z_dep
 
 
