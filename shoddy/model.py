@@ -1,10 +1,10 @@
 
-import copy
+import copy, warnings
 from numbers import Real
 
 import numpy as np
-from . import mass_function, occupation, profile
-from .utils import C, _trapz, lookup
+from . import mass_function, occupation, profile, subgalaxy
+from .utils import _trapz, lookup
 from .config import HaloConfig
 
 
@@ -17,9 +17,8 @@ class Model():
             hmf='behroozi',
             halo_prof='nfw',
             hod=None,
-            hod_pars=None,
-            multiplicity=0,
-            gal_prof='gauss',
+            pars={},
+            gal_prof=None,
             halo_mass_grid=None,
             k_grid=None,
             z_range=None,
@@ -38,9 +37,17 @@ class Model():
         self.hmf = lookup(mass_function.MODELS, hmf, "HMF")(self.config)
 
         if hod is not None:
-            self.set_hod(hod, hod_pars)
+            self.set_hod(hod)
         else:
             self._hod = None
+
+        if gal_prof is not None:
+            self.set_gal_occ(gal_prof)
+        else:
+            self._gal_occ = None
+
+        if pars:
+            self.update_pars(**pars)
 
 
 
@@ -68,6 +75,12 @@ class Model():
             raise ValueError("HOD not defined")
         return self._hod
 
+    @property
+    def gal_occ(self):
+        if self._gal_occ is None:
+            raise ValueError("Galaxy occupation not defined")
+        return self._gal_occ
+
 
     def Pk_m(self, ks, z=None):
         return self.config.Pk_m(ks, z)
@@ -82,17 +95,35 @@ class Model():
 
 
     def set_gal_occ(self, new_occ, pars=None):
-        return
+        if pars is None:
+            pars = {}
+        if not isinstance(pars, dict):
+            raise TypeError("HOD parameters argument should be a dict")
+        
+        self._gal_occ = lookup(subgalaxy.MODELS, new_occ, "Galaxy Occupation")(**pars)
 
 
     def _separate_pars(self, pars_dict):
-        return 
+        hod_pars, gal_pars = {}, {}
+
+        if self._hod is None and self._gal_occ is None:
+            raise ValueError("No occupation prescription defined to assign parameters to.")
+
+        for key, value in pars_dict.items():
+            if self._hod is not None and key in self.hod.PARS:
+                hod_pars[key] = value
+            elif self._gal_occ is not None and key in self.gal_occ.PARS:
+                gal_pars[key] = value
+            elif self._hod is not None or self._gal_occ is not None:
+                raise ValueError(f"Unrecognized parameter key `{key}`")
+
+        return hod_pars, gal_pars
 
 
     def update_pars(self, **new_pars):
-
-        #code for discriminating hod vs gal_occ pars
-        self.hod.update_pars(**new_pars)
+        hod_pars, gal_pars = self._separate_pars(new_pars)
+        self.hod.update_pars(**hod_pars)
+        self.gal_occ.update_pars(**gal_pars)
 
 
     def with_hod(self, hod_pars, new_hod=None):

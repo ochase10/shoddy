@@ -43,6 +43,8 @@ class HOD(ABC):
 
 class Zheng07(HOD):
 
+    PARS = ('M_min', 'sig_logM', 'M0', 'M1', 'alpha', 'dc')
+
     def __init__(self,
                  M_min,
                  sig_logM,

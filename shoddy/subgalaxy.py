@@ -11,17 +11,18 @@ class GalaxyOccupation(ABC):
         self.pars = {}
         return
 
+    def update_pars(self, **new_pars):
+        self.pars.update(new_pars)
 
 
 class Gaussian(GalaxyOccupation):
 
+    PARS = ()
 
     def u(self, ks):
 
         return
 
-    
-    
 
 
 MODELS = {'gauss': Gaussian}

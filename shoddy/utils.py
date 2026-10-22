@@ -11,6 +11,8 @@ LN10 = np.log(10)
 _trapz = getattr(np, 'trapezoid', np.trapz)
 
 def lookup(reg_dict, name, label):
+    if isinstance(name, type):
+        return name
     try:
         return reg_dict[name.lower()]
     except KeyError:
