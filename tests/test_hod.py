@@ -60,3 +60,27 @@ def test_update_pars(zheng):
 
 def test_zheng07_is_hod_subclass(zheng):
     assert isinstance(zheng, HOD)
+
+
+def test_missing_required_par_raises():
+    with pytest.raises(ValueError, match="Required parameter"):
+        Zheng07(M_min=1e12, sig_logM=0.3, M0=1e12, M1=1e13)
+
+
+def test_unknown_par_raises(zheng):
+    with pytest.raises(ValueError):
+        Zheng07(M_min=1e12, sig_logM=0.3, M0=1e12, M1=1e13, alpha=1.0, bogus=1)
+    with pytest.raises(ValueError):
+        zheng.update_pars(bogus=1)
+
+
+def test_dc_inherited_with_default(zheng):
+    assert zheng.pars["dc"] == 1
+
+
+def test_with_pars_leaves_parent_unchanged(zheng):
+    child = zheng.with_pars({"M_min": 1e13})
+    assert child is not zheng and isinstance(child, Zheng07)
+    assert child.pars["M_min"] == 1e13
+    assert zheng.pars["M_min"] == 1e12
+    assert child.pars["alpha"] == zheng.pars["alpha"]

@@ -32,48 +32,48 @@ before implementation.
 
 ## Phase 1 — Design decisions
 
-- [ ] **Decide:** where multiplicity lives
+- [x] **Decide:** where multiplicity lives
   - Bundled with the galaxy profile in one "galaxy" component with its own `pars` dict — *suggested*;
     parameter routing then has two destinations (HOD, galaxy)
   - Loose attribute on `Model` — three routing destinations
   - On the `HOD` base class — couples within-galaxy physics to halo occupation; `with_pars`
     rebuilds via `type(self)(**pars)` so every subclass would need to accept it
-- [ ] **Decide:** whether 1h/2h carry u_g factors
+- [x] **Decide:** whether 1h/2h carry u_g factors
   - Keep (formally consistent, ~free) — *suggested*
   - Drop (u_g ≈ 1 on 1h/2h scales)
-- [ ] **Decide:** whether to support rs = λs/λc ≠ 1 (breaks λ cancellation) — suggest deferring
-- [ ] **Decide:** whether the galaxy component is swappable after construction (analogue of
+- [x] **Decide:** whether to support rs = λs/λc ≠ 1 (breaks λ cancellation) — suggest deferring
+- [x] **Decide:** whether the galaxy component is swappable after construction (analogue of
   `set_hod(new_hod, ...)`) or fixed at `Model.__init__`
-- [ ] **Decide:** redshift used for r_d physical → comoving conversion. `config.z` is a single
+- [x] **Decide:** redshift used for r_d physical → comoving conversion. `config.z` is a single
   value, but `ACF` integrates over an n(z) range — accept `config.z` or make u_g z-dependent
 
 ## Phase 2 — Galaxy component
 
-- [ ] New component class(es) (e.g. `galaxy.py` with an ABC + `Exponential`), mirroring the
+- [x] New component class(es) (e.g. `galaxy.py` with an ABC + `Exponential`), mirroring the
   `HaloProfile` / `HOD` pattern; owns `pars` (multiplicity, r_d, ...)
-- [ ] `u_g(ks)` computed on the fly — no `u_cache` (r_d is sampled; analytic, k-only, cheap)
-- [ ] Immutable update: `with_pars` returns a new object, never mutates (shallow `copy.copy` of
+- [x] `u_g(ks)` computed on the fly — no `u_cache` (r_d is sampled; analytic, k-only, cheap)
+- [x] Immutable update: `with_pars` returns a new object, never mutates (shallow `copy.copy` of
   `Model` must not share a mutated component)
-- [ ] Units: code k is comoving 1/Mpc (`hubble_units=False`); convert r_d from physical kpc
+- [x] Units: code k is comoving 1/Mpc (`hubble_units=False`); convert r_d from physical kpc
   (× (1 + z) / 1000)
-- [ ] Default state is "off": m = 0 and u_g ≡ 1 (r_d = 0), so a `Model` without a galaxy
+- [x] Default state is "off": m = 0 and u_g ≡ 1 (r_d = 0), so a `Model` without a galaxy
   component reproduces the current HOD exactly
 
 ## Phase 3 — Parameter routing
 
-- [ ] Rename `with_hod` / `update_hod_pars` → `with_pars` / `update_pars` that update either or
+- [x] Rename `with_hod` / `update_hod_pars` → `with_pars` / `update_pars` that update either or
   both components
-- [ ] Each component declares the keys it owns (HOD already does via `pars.keys()`);
+- [x] Each component declares the keys it owns (HOD already does via `pars.keys()`);
   `with_pars` splits the incoming dict by membership
-- [ ] Unknown keys raise (a typo must not silently become a dead sampling dimension)
+- [x] Unknown keys raise (a typo must not silently become a dead sampling dimension)
 - [ ] Check for key collisions between components at construction
-- [ ] **Decide:** whether a mutating `update_pars` should exist for the galaxy component at all
+- [x] **Decide:** whether a mutating `update_pars` should exist for the galaxy component at all
 - [ ] Propagate the rename: `Observable.__call__`, tests, notebooks
 
 ## Phase 4 — Terms
 
-- [ ] `Pk_1g(ks=None, Ms=None)`; register in `_TERMS` under the `'k'` bucket
-- [ ] Apply u_g factors to `Pk_1h` and `F_k` (if kept, per Phase 1)
+- [x] `Pk_1g(ks=None, Ms=None)`; register in `_TERMS` under the `'k'` bucket
+- [x] Apply u_g factors to `Pk_1h` and `F_k` (if kept, per Phase 1)
 - [ ] Normalisation: confirm 1/n̄² with λ cancelled reduces to 1/n_host² (1h, 2h) and
   m / n_host (1g amplitude, matches note's A = (1 + δs)/n_host)
 - [ ] Check `_resolve_terms` behaviour when 1g is off (m = 0): zero array vs skipping the term
@@ -94,6 +94,6 @@ before implementation.
 
 - [ ] Projected 1g correlation analytically (Matérn kernel K(R) = (R/r_d)³ K₃(R/r_d) / (96π r_d²)) —
   avoids FFT ringing; would bypass the Hankel path for this term
-- [ ] Alternative galaxy profiles (Gaussian, e^{−r}/r, power-law tails) — the note finds results
+- [x] Alternative galaxy profiles (Gaussian, e^{−r}/r, power-law tails) — the note finds results
   insensitive to shape
 - [ ] `CF3D` conversion (see `OBSERVABLES_PLAN.md`) before the 1g term is used in 3D

@@ -1,28 +1,30 @@
 
 import numpy as np
-from numpy.typing import NDArray
-from abc import ABC, abstractmethod
-from scipy.special import sici
+from .utils import Parameterized
+
+class GalaxyOccupation(Parameterized):
+
+    PARS = {'mult': 0}
 
 
-class GalaxyOccupation(ABC):
 
-    def __init__(self):
-        self.pars = {}
-        return
-
-    def update_pars(self, **new_pars):
-        self.pars.update(new_pars)
-
+def r2sig(r):
+    return r / np.sqrt(2*np.log(2))
 
 class Gaussian(GalaxyOccupation):
 
-    PARS = ()
+    PARS = {"R": 0}
 
-    def u(self, ks):
+    def _setup(self):
+        self.sig2 = r2sig(self.pars['R'])**2
 
-        return
+    def rho(self, r):
+        norm = (2 * np.pi * self.sig2)**(-3/2)
+        prof = np.exp(-r**2 / (2*self.sig2))
+        return norm * prof
 
+    def u(self, k):
+        return np.exp(-k**2 * self.sig2 / 2)
 
 
 MODELS = {'gauss': Gaussian}

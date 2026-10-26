@@ -54,8 +54,8 @@ class Observable(ABC):
         model.hod
         self.model=model
 
-    def __call__(self, hod_pars, **kwargs):
-        return self._evaluate(self.model.with_hod(hod_pars), **kwargs)
+    def __call__(self, pars, **kwargs):
+        return self._evaluate(self.model.with_pars(pars), **kwargs)
 
     @abstractmethod
     def _evaluate(self, evalmodel, **kwargs):
@@ -85,9 +85,10 @@ class ACF(Observable):
     def _evaluate(self, newmod, theta=None, terms=None, Ms=None, damp_1h=None):
 
         z_ind, z_dep = newmod._resolve_terms(terms, ks=None, Ms=Ms, damp=damp_1h)
-        
-        ind_interp = _log_interp(self.ks_2d, newmod.ks, z_ind)
-        dep_interp = _log_interp(self.ks_2d, newmod.ks, z_dep)
+
+        mask = (newmod.ks > self.ks_2d.min()) & (newmod.ks < self.ks_2d.max())
+        ind_interp = _log_interp(self.ks_2d, newmod.ks[mask], z_ind[mask])
+        dep_interp = _log_interp(self.ks_2d, newmod.ks[mask], z_dep[mask])
         
         power = ind_interp
         if z_dep is not None:

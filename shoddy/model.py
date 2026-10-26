@@ -1,5 +1,5 @@
 
-import copy, warnings
+import copy
 from numbers import Real
 
 import numpy as np
@@ -17,8 +17,8 @@ class Model():
             hmf='behroozi',
             halo_prof='nfw',
             hod=None,
-            pars={},
-            gal_prof=None,
+            pars=None,
+            gal_prof='gauss',
             halo_mass_grid=None,
             k_grid=None,
             z_range=None,
@@ -35,21 +35,24 @@ class Model():
 
         self.halo_profile = lookup(profile.MODELS, halo_prof, "Profile")(self.config)
         self.hmf = lookup(mass_function.MODELS, hmf, "HMF")(self.config)
-
+        
+        
+        hod_cls, gal_cls, hod_pars, gal_pars = None, None, None, None
         if hod is not None:
-            self.set_hod(hod)
+            hod_cls = lookup(occupation.MODELS, hod, "HOD")
+
+        if gal_prof is not None:
+            gal_cls = lookup(subgalaxy.MODELS, gal_prof, "Galaxy Occupation")
+
+        if pars:
+            hod_pars, gal_pars = self._separate_pars(pars, hod_cls, gal_cls)
+
+        if hod_cls is not None:
+            self.set_hod(hod_cls, hod_pars)
         else:
             self._hod = None
 
-        if gal_prof is not None:
-            self.set_gal_occ(gal_prof)
-        else:
-            self._gal_occ = None
-
-        if pars:
-            self.update_pars(**pars)
-
-
+        self.set_gal_occ(gal_cls, gal_pars)
 
         self.dndm = self.hmf.dndm(self.ms)
 
@@ -90,7 +93,7 @@ class Model():
         if pars is None:
             pars = {}
         if not isinstance(pars, dict):
-            raise TypeError("HOD parameters argument should be a dict")
+            raise TypeError("Parameters argument should be a dict")
         self._hod = lookup(occupation.MODELS, new_hod, "HOD")(**pars)
 
 
@@ -98,41 +101,44 @@ class Model():
         if pars is None:
             pars = {}
         if not isinstance(pars, dict):
-            raise TypeError("HOD parameters argument should be a dict")
-        
+            raise TypeError("Parameters argument should be a dict")
         self._gal_occ = lookup(subgalaxy.MODELS, new_occ, "Galaxy Occupation")(**pars)
 
 
-    def _separate_pars(self, pars_dict):
+    def _separate_pars(self, pars_dict, hod=None, gal=None):
         hod_pars, gal_pars = {}, {}
 
-        if self._hod is None and self._gal_occ is None:
+        if hod is None and gal is None:
             raise ValueError("No occupation prescription defined to assign parameters to.")
 
         for key, value in pars_dict.items():
-            if self._hod is not None and key in self.hod.PARS:
+            if hod is not None and key in hod.PARS:
                 hod_pars[key] = value
-            elif self._gal_occ is not None and key in self.gal_occ.PARS:
+            elif gal is not None and key in gal.PARS:
                 gal_pars[key] = value
-            elif self._hod is not None or self._gal_occ is not None:
+            else:
                 raise ValueError(f"Unrecognized parameter key `{key}`")
 
         return hod_pars, gal_pars
 
 
     def update_pars(self, **new_pars):
-        hod_pars, gal_pars = self._separate_pars(new_pars)
-        self.hod.update_pars(**hod_pars)
-        self.gal_occ.update_pars(**gal_pars)
+        hod_pars, gal_pars = self._separate_pars(new_pars, self._hod, self._gal_occ)
+        if hod_pars:
+            self.hod.update_pars(**hod_pars)
+        if gal_pars:
+            self.gal_occ.update_pars(**gal_pars)
 
 
-    def with_hod(self, hod_pars, new_hod=None):
+    def with_pars(self, new_pars):
         m = copy.copy(self)
 
-        if new_hod is None:
+        hod_pars, gal_pars = self._separate_pars(new_pars, self._hod, self._gal_occ)
+
+        if self._hod is not None:
             m._hod = self.hod.with_pars(hod_pars)
-        else:
-            m.set_hod(new_hod, hod_pars)
+        if self._gal_occ is not None:
+            m._gal_occ = self.gal_occ.with_pars(gal_pars)
 
         return m
 
@@ -154,16 +160,16 @@ class Model():
         return self.hmf.halo_integral(Ms, n_avg*b_halo) / ng
 
     
-    def Pk_cs(self, Ms, u, ng):
-        igrand = self.hod.avg_NcNs(Ms)[None, :] * u
+    def Pk_cs(self, Ms, u_h, ng, u_g):
+        igrand = self.hod.avg_NcNs(Ms)[None, :] * u_h
         res = self.hmf.halo_integral(Ms, igrand, axis=1)
-        return 2.0 * res / ng**2
+        return 2.0 * res * u_g**2 / ng**2
 
 
-    def Pk_ss(self, Ms, u, ng):
-        igrand = self.hod.avg_Ns2(Ms)[None, :] * u**2
+    def Pk_ss(self, Ms, u_h, ng, u_g):
+        igrand = self.hod.avg_Ns2(Ms)[None, :] * u_h**2
         res = self.hmf.halo_integral(Ms, igrand, axis=1)
-        return res / ng**2
+        return res * u_g**2 / ng**2
 
 
     def _grids(self, ks=None, Ms=None):
@@ -173,12 +179,13 @@ class Model():
 
 
     def Pk_1h(self, ks=None, Ms=None, damp=None):
-        u = self.halo_profile.u(ks, Ms)
+        u_h = self.halo_profile.u(ks, Ms)
         ks, Ms = self._grids(ks, Ms)
 
+        u_g = self.gal_occ.u(self._physical_k_kpc(ks))
         ng = self.n_gal(Ms)
 
-        p_1h = self.Pk_cs(Ms, u, ng) + self.Pk_ss(Ms, u, ng)
+        p_1h = self.Pk_cs(Ms, u_h, ng, u_g) + self.Pk_ss(Ms, u_h, ng, u_g)
 
         if damp is None or damp is False:
             return p_1h
@@ -191,13 +198,14 @@ class Model():
 
 
     def F_k(self, ks=None, Ms=None):
-        u = self.halo_profile.u(ks, Ms)
+        u_h = self.halo_profile.u(ks, Ms)
         ks, Ms = self._grids(ks, Ms)
-        
+
         ng = self.n_gal(Ms)
-        igrand = self.hod.N_hod(Ms)[None, :] * self.hmf.bias(Ms)[None, :] * u
-        
-        return self.hmf.halo_integral(Ms, igrand, axis=1) / ng
+        igrand = self.hod.N_hod(Ms)[None, :] * self.hmf.bias(Ms)[None, :] * u_h
+
+        u_g = self.gal_occ.u(self._physical_k_kpc(ks))
+        return self.hmf.halo_integral(Ms, igrand, axis=1) * u_g / ng
 
 
     def Pk_2h(self, ks=None, z=None, Ms=None):
@@ -206,7 +214,20 @@ class Model():
         return self.Pk_m(ks, z) * Fk**2
 
 
-    def P_gal(self, terms=None, ks=None, z=None, Ms=None, damp_1h=None):
+    def _physical_k_kpc(self, k):
+        return k * (1+self.z) / 1000 
+
+
+    def Pk_1g(self, ks=None, Ms=None):
+        ks, Ms = self._grids(ks, Ms)
+        
+        u_g = self.gal_occ.u(self._physical_k_kpc(ks))
+        ng = self.n_gal(Ms)
+        
+        return u_g**2 * self.gal_occ.pars['mult'] / ng
+
+
+    def P_tot(self, terms=None, ks=None, z=None, Ms=None, damp_1h=None):
 
         z_ind, z_dep = self._resolve_terms(terms, ks=ks, Ms=Ms, damp=damp_1h)
         z_ind = 0 if z_ind is None else z_ind
@@ -243,5 +264,6 @@ class Model():
 
     
 _TERMS = {'1h': (lambda m, ks=None, Ms=None, damp=None, **kw: m.Pk_1h(ks=ks, Ms=Ms, damp=damp), 'k'),
-          '2h': (lambda m, ks=None, Ms=None, **kw: m.F_k(ks=ks, Ms=Ms)**2, 'pkm')}
+          '2h': (lambda m, ks=None, Ms=None, **kw: m.F_k(ks=ks, Ms=Ms)**2, 'pkm'),
+          '1g': (lambda m, ks=None, Ms=None, **kw: m.Pk_1g(ks=ks,Ms=Ms), 'k')}
         

@@ -15,6 +15,7 @@ from scipy.stats import norm
 from shoddy import Model
 from shoddy.mass_function import Tinker
 from shoddy.observables import ACF
+from shoddy.subgalaxy import r2sig
 
 from conftest import HOD_PARS
 
@@ -84,23 +85,23 @@ def test_pk_shapes(model_with_hod):
     m = model_with_hod
     assert m.Pk_1h().shape == m.ks.shape
     assert m.Pk_2h().shape == m.ks.shape
-    assert m.P_gal().shape == m.ks.shape
+    assert m.P_tot().shape == m.ks.shape
 
 
-def test_pgal_is_sum_of_terms_without_damping(model_with_hod):
+def test_ptot_is_sum_of_terms_without_damping(model_with_hod):
     m = model_with_hod
-    total = m.P_gal(damp_1h=None)
+    total = m.P_tot(damp_1h=None)
     assert np.allclose(total, m.Pk_1h() + m.Pk_2h())
 
 
-def test_pgal_positive(model_with_hod):
-    assert np.all(model_with_hod.P_gal() > 0)
+def test_ptot_positive(model_with_hod):
+    assert np.all(model_with_hod.P_tot() > 0)
 
 
 def test_custom_mass_grid_matches_default(model_with_hod):
     # Passing the default grid explicitly must match the cached fast path.
     m = model_with_hod
-    assert np.allclose(m.P_gal(), m.P_gal(Ms=m.ms))
+    assert np.allclose(m.P_tot(), m.P_tot(Ms=m.ms))
     assert np.isclose(m.n_gal(), m.n_gal(Ms=m.ms))
 
 
@@ -114,7 +115,7 @@ def test_interpolated_terms_match_direct(model_with_hod):
     zs = np.linspace(0.05, 0.5, 50)
     A, B = m._resolve_terms(None)
     p_interp = _log_interp(ks, m.ks, A) + _log_interp(ks, m.ks, B) * m.Pk_m(ks, zs)
-    assert np.allclose(p_interp, m.P_gal(ks=ks, z=zs), rtol=5e-3)
+    assert np.allclose(p_interp, m.P_tot(ks=ks, z=zs), rtol=5e-3)
 
 
 def test_resolve_terms_buckets(model_with_hod):
@@ -189,16 +190,131 @@ def test_cf_ang_terms_sum_to_total(hod_pars):
     assert np.allclose(w_1h + w_2h, w_tot, rtol=1e-10)
 
 
-# --- with_hod consistency ------------------------------------------------------
+# --- with_pars consistency ----------------------------------------------------
 
 
-def test_with_hod_matches_fresh_set(model_with_hod):
+def test_with_pars_matches_fresh_set(model_with_hod):
     pars = {"M_min": 5e12, "sig_logM": 0.4, "M0": 2e12, "M1": 2e13, "alpha": 1.1}
-    child = model_with_hod.with_hod(pars)
+    child = model_with_hod.with_pars(pars)
     reference = Model()
     reference.set_hod("zheng07", pars)
     assert np.isclose(child.n_gal(), reference.n_gal(), rtol=1e-10)
-    assert np.allclose(child.P_gal(), reference.P_gal(), rtol=1e-10)
+    assert np.allclose(child.P_tot(), reference.P_tot(), rtol=1e-10)
+
+
+def test_with_pars_routes_to_components(model_with_hod):
+    m = model_with_hod
+    hod_only = m.with_pars({"M_min": 5e12})
+    gal_only = m.with_pars({"mult": 1.0})
+    mixed = m.with_pars({"M_min": 5e12, "R": 1.0})
+
+    assert hod_only.hod.pars["M_min"] == 5e12 and hod_only.gal_occ.pars["mult"] == 0
+    assert gal_only.gal_occ.pars["mult"] == 1.0 and gal_only.hod.pars["M_min"] == HOD_PARS["M_min"]
+    assert mixed.hod.pars["M_min"] == 5e12 and mixed.gal_occ.pars["R"] == 1.0
+
+
+def test_with_pars_leaves_parent_unchanged(model_with_hod):
+    m = model_with_hod
+    hod, gal = m.hod, m.gal_occ
+    m.with_pars({"M_min": 5e12, "mult": 1.0, "R": 1.0})
+    assert m.hod is hod and m.gal_occ is gal
+    assert m.hod.pars["M_min"] == HOD_PARS["M_min"]
+    assert m.gal_occ.pars == {"mult": 0, "R": 0}
+
+
+def test_with_pars_unknown_key_raises(model_with_hod):
+    with pytest.raises(ValueError, match="Unrecognized parameter"):
+        model_with_hod.with_pars({"bogus": 1.0})
+
+
+def test_update_pars_routes_to_components(fresh_model_with_hod):
+    m = fresh_model_with_hod
+    m.update_pars(M_min=5e12, mult=1.0, R=1.0)
+    assert m.hod.pars["M_min"] == 5e12
+    assert m.gal_occ.pars == {"mult": 1.0, "R": 1.0}
+    with pytest.raises(ValueError):
+        m.update_pars(bogus=1.0)
+
+
+def test_constructor_routes_pars():
+    m = Model(hod="zheng07", pars={**HOD_PARS, "mult": 1.0, "R": 1.0})
+    assert m.hod.pars["M_min"] == HOD_PARS["M_min"]
+    assert m.gal_occ.pars == {"mult": 1.0, "R": 1.0}
+    with pytest.raises(ValueError, match="Unrecognized parameter"):
+        Model(hod="zheng07", pars={**HOD_PARS, "bogus": 1.0})
+
+
+# --- One-galaxy term -----------------------------------------------------------
+
+
+def test_default_galaxy_component_is_off(model):
+    assert model.gal_occ.pars == {"mult": 0, "R": 0}
+
+
+def test_pk_1g_zero_by_default(model_with_hod):
+    m = model_with_hod
+    assert np.all(m.Pk_1g() == 0)
+    assert np.allclose(m.P_tot(), m.Pk_1h() + m.Pk_2h())
+
+
+def test_pk_1g_amplitude_is_mult_over_ngal(model_with_hod):
+    m = model_with_hod.with_pars({"mult": 2.0, "R": 1.0})
+    assert np.isclose(m.Pk_1g(ks=np.array([1e-6]))[0] * m.n_gal(), 2.0)
+
+
+def test_pk_1g_linear_in_mult(model_with_hod):
+    p1 = model_with_hod.with_pars({"mult": 1.0, "R": 1.0}).Pk_1g()
+    p3 = model_with_hod.with_pars({"mult": 3.0, "R": 1.0}).Pk_1g()
+    assert np.allclose(p3, 3 * p1)
+
+
+def test_ptot_includes_1g(model_with_hod):
+    m = model_with_hod.with_pars({"mult": 1.0, "R": 1.0})
+    assert np.allclose(m.P_tot(), m.Pk_1h() + m.Pk_2h() + m.Pk_1g())
+
+
+def test_resolve_terms_1g_bucket(model_with_hod):
+    m = model_with_hod.with_pars({"mult": 1.0, "R": 1.0})
+    A, B = m._resolve_terms(["1g"])
+    assert B is None and np.allclose(A, m.Pk_1g())
+
+
+def test_u_g_damps_1h_and_2h(model_with_hod):
+    # u_g multiplies each object's offset, so 1h ~ u_g^2 and F_k ~ u_g.
+    base = model_with_hod
+    m = base.with_pars({"R": 1.0})
+    u_g = m.gal_occ.u(m._physical_k_kpc(m.ks))
+    assert np.any(u_g < 0.99)
+    assert np.allclose(m.Pk_1h(), base.Pk_1h() * u_g**2)
+    assert np.allclose(m.F_k(), base.F_k() * u_g)
+
+
+def test_R_converted_from_physical_kpc(hod_pars):
+    # R in physical kpc -> comoving Mpc is R (1 + z) / 1000.
+    z, R = 1.0, 2.0
+    m = Model(z=z, hod="zheng07", pars={**hod_pars, "R": R})
+    sig_c = r2sig(R) * (1 + z) / 1000
+    assert np.allclose(m.gal_occ.u(m._physical_k_kpc(m.ks)),
+                       np.exp(-(m.ks * sig_c) ** 2 / 2))
+
+
+def test_acf_routes_galaxy_pars(model_with_hod):
+    acf = ACF(model_with_hod)
+    theta = np.logspace(-4, -1, 5)
+    w_off, _ = acf({}, theta=theta)
+    w_on, _ = acf({"mult": 1.0, "R": 1.0}, theta=theta)
+    assert np.all(w_on[:2] > w_off[:2])  # 1g adds small-scale power
+    with pytest.raises(ValueError):
+        acf({"bogus": 1.0})
+
+
+def test_cf_ang_terms_sum_to_total_with_1g(hod_pars):
+    m = Model(z=1, hod="zheng07", pars={**hod_pars, "mult": 1.0, "R": 1.0})
+    acf = ACF(m)
+    theta = np.logspace(-3, 0, 10)
+    w_tot, _ = acf({}, theta=theta)
+    w_terms = [acf({}, terms=t, theta=theta)[0] for t in ("1h", "2h", "1g")]
+    assert np.allclose(sum(w_terms), w_tot, rtol=1e-10)
 
 
 # --- Numerical regression snapshots --------------------------------------------
@@ -219,12 +335,12 @@ REG_HOD = {**HOD_PARS, "dc": 1.0}
 
 @pytest.fixture(scope="module")
 def reg_model():
-    return Model(z=0, hod="zheng07", hod_pars=dict(REG_HOD), **REG_MODEL)
+    return Model(z=0, hod="zheng07", pars=dict(REG_HOD), **REG_MODEL)
 
 
 @pytest.fixture(scope="module")
 def reg_model_z1():
-    return Model(z=1, hod="zheng07", hod_pars=dict(REG_HOD), **REG_MODEL)
+    return Model(z=1, hod="zheng07", pars=dict(REG_HOD), **REG_MODEL)
 
 
 # Power spectra are evaluated at fixed k, undamped.
@@ -241,7 +357,7 @@ REGRESSION = {
 def test_regression_snapshots(reg_model):
     m = reg_model
     ks = np.array([1e-4, 1e-1])
-    p_gal = m.P_gal(ks=ks)
+    p_gal = m.P_tot(ks=ks)
     got = {
         "n_gal": m.n_gal(),
         "galaxy_bias": m.galaxy_bias(),

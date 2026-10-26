@@ -1,13 +1,15 @@
 
-from abc import ABC, abstractmethod
+from abc import abstractmethod
 import numpy as np
 from scipy.special import erf
-from numpy.typing import ArrayLike, NDArray
+from numpy.typing import NDArray
+from .utils import REQUIRED, Parameterized
 
 
 
-class HOD(ABC):
-    pars: dict
+class HOD(Parameterized):
+
+    PARS = {'dc': 1}
 
     @abstractmethod
     def satellites(self, M_halo) -> NDArray[np.floating]:
@@ -30,38 +32,15 @@ class HOD(ABC):
     def avg_Ns2(self, M_halo):
         return self.satellites(M_halo)**2
 
-    
-    def update_pars(self, **new_pars):
-        self.pars.update(new_pars)
-
-
-    def with_pars(self, new_pars):
-        return type(self)(**{**self.pars, **new_pars})
-
-
 
 
 class Zheng07(HOD):
 
-    PARS = ('M_min', 'sig_logM', 'M0', 'M1', 'alpha', 'dc')
-
-    def __init__(self,
-                 M_min,
-                 sig_logM,
-                 M0,
-                 M1,
-                 alpha,
-                 dc=1.):
-        
-        super().__init__()
-        
-        self.pars = {'M_min': M_min,
-                     'sig_logM': sig_logM, 
-                     'M0': M0,
-                     'M1': M1,
-                     'alpha': alpha,
-                     'dc': dc}
-
+    PARS = {'M_min':REQUIRED,
+            'sig_logM':REQUIRED,
+            'M0':REQUIRED,
+            'M1':REQUIRED,
+            'alpha':REQUIRED}
 
     def centrals(self, M_halo) -> NDArray[np.floating]:
         return self.pars['dc'] * 0.5 * (1 + erf((np.log10(M_halo) - np.log10(self.pars['M_min'])) / self.pars['sig_logM']))
