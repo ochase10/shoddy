@@ -27,4 +27,18 @@ class Gaussian(GalaxyOccupation):
         return np.exp(-k**2 * self.sig2 / 2)
 
 
-MODELS = {'gauss': Gaussian}
+class Exponential(GalaxyOccupation):
+
+    PARS = {"R": 0}
+
+    def rho(self, r):
+        norm = (8 * np.pi * self.pars['R']**3)
+        prof = np.exp(-r / self.pars['R'])
+        return prof / norm
+
+    def u(self, k):
+        return (1 + k**2 * self.pars['R']**2)**-2
+
+
+MODELS = {'gauss': Gaussian,
+          'expo': Exponential}

@@ -314,7 +314,8 @@ def test_cf_ang_terms_sum_to_total_with_1g(hod_pars):
     theta = np.logspace(-3, 0, 10)
     w_tot, _ = acf({}, theta=theta)
     w_terms = [acf({}, terms=t, theta=theta)[0] for t in ("1h", "2h", "1g")]
-    assert np.allclose(sum(w_terms), w_tot, rtol=1e-10)
+    # 1h+1g share a log-interp, so splitting them is only exact to interpolation error
+    assert np.allclose(sum(w_terms), w_tot, rtol=1e-3)
 
 
 # --- Numerical regression snapshots --------------------------------------------

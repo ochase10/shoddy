@@ -76,6 +76,11 @@ class ACF(Observable):
         self.ks_2d = (self.ls[None, :] + 0.5) / chi_z[:, None]  # (n_z, n_l)
         z_2d = np.broadcast_to(self.z_arr[:, None], self.ks_2d.shape)
 
+        lo, hi = np.searchsorted(model.ks, [self.ks_2d.min(), self.ks_2d.max()])
+        lo = 1 if lo-1 < 0 else lo
+        self.slice = slice(lo-1,hi+1)
+        self.useks = model.ks[self.slice]
+
         self.kernel = h_z * nz**2 / C / chi_z**2
         self.pkm = model.Pk_m(ks=self.ks_2d.ravel(), z=z_2d.ravel()).reshape(self.ks_2d.shape)
 
@@ -86,9 +91,11 @@ class ACF(Observable):
 
         z_ind, z_dep = newmod._resolve_terms(terms, ks=None, Ms=Ms, damp=damp_1h)
 
-        mask = (newmod.ks > self.ks_2d.min()) & (newmod.ks < self.ks_2d.max())
-        ind_interp = _log_interp(self.ks_2d, newmod.ks[mask], z_ind[mask])
-        dep_interp = _log_interp(self.ks_2d, newmod.ks[mask], z_dep[mask])
+        z_ind = z_ind[self.slice] if z_ind is not None else None
+        z_dep = z_dep[self.slice] if z_dep is not None else None
+        
+        ind_interp = _log_interp(self.ks_2d, self.useks, z_ind)
+        dep_interp = _log_interp(self.ks_2d, self.useks, z_dep)
         
         power = ind_interp
         if z_dep is not None:
