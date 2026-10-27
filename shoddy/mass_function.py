@@ -63,6 +63,26 @@ class MassFunction(ABC):
 
 class Tinker(MassFunction):
 
+    # delta, A, a, b, c
+    _hyper_z0 = np.array([[200, 0.186, 1.47, 2.57, 1.19]])
+
+
+    def __init__(self, config):
+        super().__init__(config)
+        self._hyperpars()
+
+
+    def _hyperpars(self):
+        ind = np.argwhere(self._hyper_z0[:,0] == self.config.delta)[0]
+        p0 = self._hyper_z0[ind, 1:]
+
+        self.A = p0[0] * (1 + self.config.z)**(-0.14)
+        self.a = p0[1] * (1 + self.config.z)**(-0.06)
+        logalpha = -(0.75 / np.log10(self.config.delta/75))**1.2
+        self.b = p0[2] * (1 + self.config.z)**(-10**logalpha)
+        self.c = p0[3]
+
+
     def dndm(self, M_halo):
         sig_m = self.config.sigma_m(M_halo)
         # dlnsig/dM = (dlnsig/dlnM) / M
@@ -70,8 +90,8 @@ class Tinker(MassFunction):
         return self.fsig(sig_m) * self.config.rho_m * (-dlnsig_dM) / M_halo
 
 
-    def fsig(self, sig, A=0.186, a=1.47, b=2.57, c=1.19):
-        return A * ((sig/b)**(-a) + 1) * np.exp(-c / sig**2)
+    def fsig(self, sig):
+        return self.A * ((sig/self.b)**(-self.a) + 1) * np.exp(-self.c / sig**2)
 
 
     def bias(self, M_halo):
