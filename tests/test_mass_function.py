@@ -71,3 +71,28 @@ def test_behroozi_applies_correction_to_tinker(model):
 
 def test_tinker_is_mass_function(model):
     assert isinstance(Tinker(model.config), MassFunction)
+
+
+class _StubConfig:
+    def __init__(self, z, delta):
+        self.z, self.delta = z, delta
+
+
+def test_tinker_hyperpars_match_table_at_z0():
+    t = Tinker(_StubConfig(z=0, delta=200))
+    assert np.allclose([t.A, t.a, t.b, t.c], Tinker._hyper_z0[0, 1:])
+
+
+def test_tinker_hyperpars_z_evolution():
+    t0 = Tinker(_StubConfig(z=0, delta=200))
+    t1 = Tinker(_StubConfig(z=1, delta=200))
+    assert np.isclose(t1.A, t0.A * 2**-0.14)
+    assert np.isclose(t1.a, t0.a * 2**-0.06)
+    assert t1.b < t0.b
+    assert t1.c == t0.c
+
+
+def test_tinker_hyperpars_do_not_mutate_table():
+    table = Tinker._hyper_z0.copy()
+    Tinker(_StubConfig(z=1, delta=500))
+    assert np.array_equal(Tinker._hyper_z0, table)

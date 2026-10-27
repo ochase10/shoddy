@@ -64,7 +64,13 @@ class MassFunction(ABC):
 class Tinker(MassFunction):
 
     # delta, A, a, b, c
-    _hyper_z0 = np.array([[200, 0.186, 1.47, 2.57, 1.19]])
+    _hyper_z0 = np.array([[200, 0.186, 1.47, 2.57, 1.19],
+                          [300, 0.200, 1.52, 2.25, 1.27],
+                          [400, 0.212, 1.56, 2.05, 1.34],
+                          [600, 0.218, 1.61, 1.87, 1.45],
+                          [800, 0.248, 1.87, 1.59, 1.58],
+                          [1200, 0.255, 2.13, 1.51, 1.80],
+                          [1600, 0.260, 2.30, 1.46, 1.97]])
 
 
     def __init__(self, config):
@@ -73,8 +79,7 @@ class Tinker(MassFunction):
 
 
     def _hyperpars(self):
-        ind = np.argwhere(self._hyper_z0[:,0] == self.config.delta)[0]
-        p0 = self._hyper_z0[ind, 1:]
+        p0 = [np.interp(self.config.delta, self._hyper_z0[:,0], par) for par in self._hyper_z0.T[1:]]
 
         self.A = p0[0] * (1 + self.config.z)**(-0.14)
         self.a = p0[1] * (1 + self.config.z)**(-0.06)

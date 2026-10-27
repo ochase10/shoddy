@@ -383,4 +383,4 @@ def test_regression_cf_ang(reg_model_z1):
     acf = ACF(reg_model_z1, zs=zs, nz=norm.pdf(zs, 1.0, 0.25),
               ls=np.logspace(0, 6, 1001))
     w, _ = acf({}, theta=[0.01, 0.1])
-    assert np.allclose(w, [0.07145347, 0.0155232], rtol=1e-6)
+    assert np.allclose(w, [0.07565478, 0.01535156], rtol=1e-6)
