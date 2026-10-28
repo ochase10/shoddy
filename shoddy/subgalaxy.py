@@ -4,7 +4,7 @@ from .utils import Parameterized
 
 class GalaxyOccupation(Parameterized):
 
-    PARS = {'mult': 0}
+    PARS = {'corr': -1}
 
 
 

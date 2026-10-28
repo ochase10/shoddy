@@ -223,8 +223,12 @@ class Model():
         
         u_g = self.gal_occ.u(self._physical_k_kpc(ks))
         ng = self.n_gal(Ms)
-        
-        return u_g**2 * self.gal_occ.pars['mult'] / ng
+
+        # No integral here because it reduces to n_gal times factors.
+        # That cancels with 1 ng in the denominator. 
+        # DC enters here so that the 1g term is indpendent of it since it 
+        #  enters into ng linearly (ng = DC * n_host)
+        return u_g**2 * (self.gal_occ.pars['corr']+1) * self.hod.pars['dc'] / ng
 
 
     def P_tot(self, terms=None, ks=None, z=None, Ms=None, damp_1h=None):

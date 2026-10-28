@@ -205,21 +205,21 @@ def test_with_pars_matches_fresh_set(model_with_hod):
 def test_with_pars_routes_to_components(model_with_hod):
     m = model_with_hod
     hod_only = m.with_pars({"M_min": 5e12})
-    gal_only = m.with_pars({"mult": 1.0})
+    gal_only = m.with_pars({"corr": 0.0})
     mixed = m.with_pars({"M_min": 5e12, "R": 1.0})
 
-    assert hod_only.hod.pars["M_min"] == 5e12 and hod_only.gal_occ.pars["mult"] == 0
-    assert gal_only.gal_occ.pars["mult"] == 1.0 and gal_only.hod.pars["M_min"] == HOD_PARS["M_min"]
+    assert hod_only.hod.pars["M_min"] == 5e12 and hod_only.gal_occ.pars["corr"] == -1
+    assert gal_only.gal_occ.pars["corr"] == 0.0 and gal_only.hod.pars["M_min"] == HOD_PARS["M_min"]
     assert mixed.hod.pars["M_min"] == 5e12 and mixed.gal_occ.pars["R"] == 1.0
 
 
 def test_with_pars_leaves_parent_unchanged(model_with_hod):
     m = model_with_hod
     hod, gal = m.hod, m.gal_occ
-    m.with_pars({"M_min": 5e12, "mult": 1.0, "R": 1.0})
+    m.with_pars({"M_min": 5e12, "corr": 0.0, "R": 1.0})
     assert m.hod is hod and m.gal_occ is gal
     assert m.hod.pars["M_min"] == HOD_PARS["M_min"]
-    assert m.gal_occ.pars == {"mult": 0, "R": 0}
+    assert m.gal_occ.pars == {"corr": -1, "R": 0}
 
 
 def test_with_pars_unknown_key_raises(model_with_hod):
@@ -229,17 +229,17 @@ def test_with_pars_unknown_key_raises(model_with_hod):
 
 def test_update_pars_routes_to_components(fresh_model_with_hod):
     m = fresh_model_with_hod
-    m.update_pars(M_min=5e12, mult=1.0, R=1.0)
+    m.update_pars(M_min=5e12, corr=0.0, R=1.0)
     assert m.hod.pars["M_min"] == 5e12
-    assert m.gal_occ.pars == {"mult": 1.0, "R": 1.0}
+    assert m.gal_occ.pars == {"corr": 0.0, "R": 1.0}
     with pytest.raises(ValueError):
         m.update_pars(bogus=1.0)
 
 
 def test_constructor_routes_pars():
-    m = Model(hod="zheng07", pars={**HOD_PARS, "mult": 1.0, "R": 1.0})
+    m = Model(hod="zheng07", pars={**HOD_PARS, "corr": 0.0, "R": 1.0})
     assert m.hod.pars["M_min"] == HOD_PARS["M_min"]
-    assert m.gal_occ.pars == {"mult": 1.0, "R": 1.0}
+    assert m.gal_occ.pars == {"corr": 0.0, "R": 1.0}
     with pytest.raises(ValueError, match="Unrecognized parameter"):
         Model(hod="zheng07", pars={**HOD_PARS, "bogus": 1.0})
 
@@ -248,7 +248,7 @@ def test_constructor_routes_pars():
 
 
 def test_default_galaxy_component_is_off(model):
-    assert model.gal_occ.pars == {"mult": 0, "R": 0}
+    assert model.gal_occ.pars == {"corr": -1, "R": 0}
 
 
 def test_pk_1g_zero_by_default(model_with_hod):
@@ -257,24 +257,24 @@ def test_pk_1g_zero_by_default(model_with_hod):
     assert np.allclose(m.P_tot(), m.Pk_1h() + m.Pk_2h())
 
 
-def test_pk_1g_amplitude_is_mult_over_ngal(model_with_hod):
-    m = model_with_hod.with_pars({"mult": 2.0, "R": 1.0})
-    assert np.isclose(m.Pk_1g(ks=np.array([1e-6]))[0] * m.n_gal(), 2.0)
+def test_pk_1g_amplitude_is_corr_plus_one_times_dc_over_ngal(model_with_hod):
+    m = model_with_hod.with_pars({"corr": 1.0, "dc": 0.5, "R": 1.0})
+    assert np.isclose(m.Pk_1g(ks=np.array([1e-6]))[0] * m.n_gal(), 2.0 * 0.5)
 
 
-def test_pk_1g_linear_in_mult(model_with_hod):
-    p1 = model_with_hod.with_pars({"mult": 1.0, "R": 1.0}).Pk_1g()
-    p3 = model_with_hod.with_pars({"mult": 3.0, "R": 1.0}).Pk_1g()
-    assert np.allclose(p3, 3 * p1)
+def test_pk_1g_linear_in_corr_plus_one(model_with_hod):
+    p1 = model_with_hod.with_pars({"corr": 0.0, "R": 1.0}).Pk_1g()
+    p3 = model_with_hod.with_pars({"corr": 2.0, "R": 1.0}).Pk_1g()
+    assert np.allclose(p3, 3 * p1)  # (corr + 1) = 1 -> 3
 
 
 def test_ptot_includes_1g(model_with_hod):
-    m = model_with_hod.with_pars({"mult": 1.0, "R": 1.0})
+    m = model_with_hod.with_pars({"corr": 0.0, "R": 1.0})
     assert np.allclose(m.P_tot(), m.Pk_1h() + m.Pk_2h() + m.Pk_1g())
 
 
 def test_resolve_terms_1g_bucket(model_with_hod):
-    m = model_with_hod.with_pars({"mult": 1.0, "R": 1.0})
+    m = model_with_hod.with_pars({"corr": 0.0, "R": 1.0})
     A, B = m._resolve_terms(["1g"])
     assert B is None and np.allclose(A, m.Pk_1g())
 
@@ -302,14 +302,14 @@ def test_acf_routes_galaxy_pars(model_with_hod):
     acf = ACF(model_with_hod)
     theta = np.logspace(-4, -1, 5)
     w_off, _ = acf({}, theta=theta)
-    w_on, _ = acf({"mult": 1.0, "R": 1.0}, theta=theta)
+    w_on, _ = acf({"corr": 0.0, "R": 1.0}, theta=theta)
     assert np.all(w_on[:2] > w_off[:2])  # 1g adds small-scale power
     with pytest.raises(ValueError):
         acf({"bogus": 1.0})
 
 
 def test_cf_ang_terms_sum_to_total_with_1g(hod_pars):
-    m = Model(z=1, hod="zheng07", pars={**hod_pars, "mult": 1.0, "R": 1.0})
+    m = Model(z=1, hod="zheng07", pars={**hod_pars, "corr": 0.0, "R": 1.0})
     acf = ACF(m)
     theta = np.logspace(-3, 0, 10)
     w_tot, _ = acf({}, theta=theta)

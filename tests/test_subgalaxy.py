@@ -9,19 +9,19 @@ from shoddy.utils import _trapz
 
 @pytest.fixture
 def gauss():
-    return Gaussian(R=1.0, mult=2.0)
+    return Gaussian(R=1.0, corr=1.0)
 
 
 def test_defaults_are_off():
-    # mult=0 (no 1g term) and R=0 (u_g = 1) reproduce the plain HOD.
+    # corr=-1 (no 1g term) and R=0 (u_g = 1) reproduce the plain HOD.
     g = Gaussian()
-    assert g.pars == {"mult": 0, "R": 0}
+    assert g.pars == {"corr": -1, "R": 0}
     k = np.logspace(-4, 4, 50)
     assert np.all(g.u(k) == 1.0)
 
 
 def test_pars_inherit_from_base():
-    assert "mult" in Gaussian.PARS and "R" in Gaussian.PARS
+    assert "corr" in Gaussian.PARS and "R" in Gaussian.PARS
     assert isinstance(Gaussian(), GalaxyOccupation)
 
 
@@ -52,8 +52,8 @@ def test_update_pars_reruns_setup(gauss):
 def test_with_pars_leaves_parent_unchanged(gauss):
     child = gauss.with_pars({"R": 3.0})
     assert child is not gauss
-    assert child.pars == {"mult": 2.0, "R": 3.0}
-    assert gauss.pars == {"mult": 2.0, "R": 1.0}
+    assert child.pars == {"corr": 1.0, "R": 3.0}
+    assert gauss.pars == {"corr": 1.0, "R": 1.0}
     assert np.isclose(gauss.sig2, r2sig(1.0) ** 2)
 
 
